@@ -37,22 +37,42 @@ LCL_DIR = WEBAPP_DIR.parent
 sys.path.insert(0, str(LCL_DIR))
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, send_from_directory, url_for
+from werkzeug.routing import BaseConverter
 
 import pandas as pd
 
 import sweep_aggregate
 import sweep_compile
 import sweep_generate
+import sweep_hash as sh
 import sweep_history
 import sweep_launch
 import sweep_monitor
 import sweep_publish_dataset
 import sweep_run_local
 from sweep_compile import SWEEP_RUNS_DIR
+from sweep_generate import SAFE_SEGMENT_PATTERN
 from sweep_publish_dataset import DATASETS_DIR
 
 app = Flask(__name__)
 app.secret_key = "lightcurvelynx-webapp-local"  # solo para flash() -- app local, sin sesiones reales
+
+
+class SafeSegmentConverter(BaseConverter):
+    """Fase 92 (hardening): convertidor de ruta Werkzeug para CUALQUIER
+    segmento de URL que se use para construir un Path en disco (nombre de
+    sweep, run_hash, dataset_hash) -- mismo patron que ya validaba
+    sweep_generate.SWEEP_NAME_RE al CREAR un sweep, ahora tambien exigido
+    al LEER/ESCRIBER por nombre. Un segmento que no matchea da 404 de
+    Flask antes de que corra el cuerpo de la vista -- una sola fuente de
+    verdad en vez de un `if` repetido en cada ruta. `send_from_directory`
+    (usado en qc_image) ya sanitiza su argumento `filename`; lo que NO
+    sanitizaba es el `directory` construido con estos segmentos, que es
+    justo lo que este convertidor cierra."""
+    regex = SAFE_SEGMENT_PATTERN
+
+
+app.url_map.converters["safe"] = SafeSegmentConverter
 
 # Guard en memoria para no lanzar el mismo sweep 2 veces en paralelo -- NO
 # es fuente de verdad de estado (esa sigue siendo run_hash.json via
@@ -61,6 +81,12 @@ app.secret_key = "lightcurvelynx-webapp-local"  # solo para flash() -- app local
 # Solo aplica al runner LOCAL (sin SLURM, ver sweep_run() abajo) -- una
 # corrida real vía sbatch no depende de que este proceso siga vivo.
 RUNNING: dict[str, threading.Thread] = {}
+# Fase 92 (hardening): candado real para que el check-y-registro de arriba
+# sea atomico -- sin esto, dos POST casi simultaneos a /sweep/<name>/run
+# pueden ambos pasar `is_alive()` antes de que cualquiera alcance a
+# registrar su hilo, lanzando el runner local dos veces en paralelo para
+# el mismo sweep (ver sweep_run()).
+RUNNING_LOCK = threading.Lock()
 
 
 def slurm_available() -> bool:
@@ -175,11 +201,32 @@ def generate():
         flash(str(e))
         return redirect(url_for("index"))
 
-    sweep_compile.compile_sweep(yaml_path, triggered_by="webapp")
+    manifest_path = sweep_compile.compile_sweep(yaml_path, triggered_by="webapp")
+
+    # Fase 92 (hardening): el aviso de ngentot excesivo ya existia
+    # (sweep_compile.NGENTOT_WARN_THRESHOLD) pero solo se imprimia en la
+    # consola del proceso Flask -- nunca llegaba al navegador, que es el
+    # unico punto de entrada real de esta app. Causo un incidente real
+    # documentado en NOTES.md Fase 87 (sweep 'test3'/KN-K17 con
+    # ngentot=1000000, 200x el umbral, corrido sin aviso visible). Se
+    # reusa el ngentot YA RESUELTO por build_runs() (cubre tanto overrides
+    # explicitos del formulario como los defaults de CLASS_CONFIGS), sin
+    # duplicar el calculo del umbral en ningun otro lado.
+    manifest = sh.read_json(manifest_path)
+    over_threshold = sorted({
+        r["class_key"] for r in manifest["runs"]
+        if r["ngentot"] > sweep_compile.NGENTOT_WARN_THRESHOLD
+    })
+    if over_threshold:
+        flash(
+            f"ATENCION: ngentot supera el umbral historico del proyecto "
+            f"({sweep_compile.NGENTOT_WARN_THRESHOLD}) para: {', '.join(over_threshold)} -- "
+            f"confirmar que es intencional antes de apretar 'Lanzar'."
+        )
     return redirect(url_for("sweep_status", name=form.get("sweep_name")))
 
 
-@app.route("/sweep/<name>")
+@app.route("/sweep/<safe:name>")
 def sweep_status(name):
     manifest_path = SWEEP_RUNS_DIR / name / "manifest.json"
     if not manifest_path.exists():
@@ -221,7 +268,7 @@ def sweep_status(name):
     )
 
 
-@app.route("/sweep/<name>/run", methods=["POST"])
+@app.route("/sweep/<safe:name>/run", methods=["POST"])
 def sweep_run(name):
     yaml_path = sweep_generate.SWEEPS_DIR / f"{name}.yaml"
 
@@ -241,24 +288,29 @@ def sweep_run(name):
     # Sin SLURM (p.ej. la maquina local del profesor, sin cluster -- ver
     # HOWTO_LOCAL.md/Fase 76): unico caso real donde correr en este mismo
     # proceso es correcto, porque no hay otro lado donde correr.
-    if name in RUNNING and RUNNING[name].is_alive():
-        flash(f"'{name}' ya esta corriendo -- no se lanza dos veces en paralelo")
-        return redirect(url_for("sweep_status", name=name))
-
     workers = request.form.get("workers", "").strip()
     workers_override = int(workers) if workers.isdigit() else None
 
     def _run():
         sweep_run_local.run_sweep_local(yaml_path, workers_override=workers_override, triggered_by="webapp")
 
-    thread = threading.Thread(target=_run, daemon=True)
-    RUNNING[name] = thread
-    thread.start()
+    # Fase 92 (hardening): check-y-registro atomico bajo RUNNING_LOCK --
+    # sin esto, dos POST casi simultaneos a esta ruta podian ambos pasar
+    # `is_alive()` antes de que cualquiera alcanzara a registrar su hilo,
+    # lanzando run_sweep_local() dos veces en paralelo para el mismo sweep.
+    with RUNNING_LOCK:
+        existing = RUNNING.get(name)
+        if existing is not None and existing.is_alive():
+            flash(f"'{name}' ya esta corriendo -- no se lanza dos veces en paralelo")
+            return redirect(url_for("sweep_status", name=name))
+        thread = threading.Thread(target=_run, daemon=True)
+        RUNNING[name] = thread
+        thread.start()
     flash(f"'{name}' lanzado en segundo plano (sin SLURM en esta maquina) -- el estado se actualiza abajo")
     return redirect(url_for("sweep_status", name=name))
 
 
-@app.route("/sweep/<name>/status")
+@app.route("/sweep/<safe:name>/status")
 def sweep_status_json(name):
     # Mismo guard que la vista HTML (sweep_status): un sweep sin
     # manifest.json compilado no tiene estado que reportar. Devolver 404
@@ -275,7 +327,7 @@ def sweep_status_json(name):
     return jsonify(rows)
 
 
-@app.route("/sweep/<name>/panel")
+@app.route("/sweep/<safe:name>/panel")
 def sweep_panel_json(name):
     """Fase 91: panel agregado en vivo (sweep_aggregate.build_live_panel) --
     el JS de sweep_status.html lo pide solo cuando cambia el numero de
@@ -285,7 +337,7 @@ def sweep_panel_json(name):
     return jsonify(sweep_aggregate.build_live_panel(name))
 
 
-@app.route("/sweep/<name>/run/<run_hash>/summary")
+@app.route("/sweep/<safe:name>/run/<safe:run_hash>/summary")
 def run_summary(name, run_hash):
     """Fase 87: 'donde quedaron los resultados' en una pagina real, sin
     tocar la terminal -- lee summary.json (las metricas reales de esa
@@ -305,14 +357,14 @@ def run_summary(name, run_hash):
     )
 
 
-@app.route("/sweep/<name>/aggregate", methods=["POST"])
+@app.route("/sweep/<safe:name>/aggregate", methods=["POST"])
 def sweep_aggregate_route(name):
     sweep_aggregate.aggregate_sweep(name)
     flash(f"'{name}' agregado")
     return redirect(url_for("sweep_status", name=name))
 
 
-@app.route("/sweep/<name>/publish", methods=["POST"])
+@app.route("/sweep/<safe:name>/publish", methods=["POST"])
 def sweep_publish_route(name):
     try:
         out_dir = sweep_publish_dataset.publish_dataset([name], triggered_by="webapp")
@@ -322,8 +374,12 @@ def sweep_publish_route(name):
     return redirect(url_for("dataset_view", dataset_hash=out_dir.name))
 
 
-@app.route("/qc/<sweep>/<run_hash>/<filename>")
+@app.route("/qc/<safe:sweep>/<safe:run_hash>/<filename>")
 def qc_image(sweep, run_hash, filename):
+    # Fase 92: `sweep`/`run_hash` (los que construyen `qc_dir`) ya vienen
+    # validados por el convertidor `safe` -- `filename` sigue como
+    # `<string>` normal porque `send_from_directory` ya lo sanitiza contra
+    # traversal (es justo el argumento que SI protegia antes de esta fase).
     qc_dir = SWEEP_RUNS_DIR / sweep / "runs" / run_hash / "qc"
     return send_from_directory(qc_dir, filename)
 
@@ -333,7 +389,7 @@ def history():
     return render_template("history.html", events=sweep_history.read_history())
 
 
-@app.route("/datasets/<dataset_hash>")
+@app.route("/datasets/<safe:dataset_hash>")
 def dataset_view(dataset_hash):
     import sweep_hash as sh
     manifest_path = DATASETS_DIR / dataset_hash / "manifest.json"

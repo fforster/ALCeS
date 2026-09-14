@@ -9768,3 +9768,86 @@ cambiar `n_done`) -- ver despliegue de esta fase.
 Modificado: `sweep_aggregate.py` (`build_live_panel` nueva, `import numpy as np`), `webapp/app.py`
 (`sweep_panel_json` nueva), `webapp/templates/sweep_status.html` (miniaturas QC embebidas, panel en
 vivo, JS de conteo de `done`). `NOTES.md`: esta entrada.
+
+## Fase 92 -- hardening de seguridad (auditoría real pedida por el usuario)
+
+### Motivación
+
+El usuario pidió revisar el sistema completo (túnel SSH + webapp + scripts) por vulnerabilidades.
+Auditoría real (3 agentes de investigación + 1 de diseño) encontró 5 problemas concretos, confirmados
+contra el código real; el usuario decidió arreglar estos 5 sin agregar autenticación (cambio de mayor
+alcance, fuera de esta ronda):
+
+1. **Path traversal de lectura** en `/qc/<sweep>/<run_hash>/<filename>`, `/sweep/<name>` (lee y
+   renderiza el `.yaml`), `/sweep/<name>/run/<run_hash>/summary` (lista directorio), `/sweep/<name>/
+   status`, `/datasets/<dataset_hash>` -- construían `Path` con segmentos de URL sin validar.
+   `send_from_directory` solo sanitiza `filename`, no el `directory` construido con esos segmentos.
+2. **Path traversal de escritura** en `/sweep/<name>/aggregate` y `/sweep/<name>/publish` -- mismo
+   problema, pero escribiendo `aggregated_summary.parquet`/dataset en la ruta traversada.
+3. **Inyección de shell** en `deploy_local.sh:45-46`: `$SWEEP_YAML`/`$DRY_RUN_FLAG` interpolados sin
+   comillas dentro del comando remoto que ejecuta `ssh`.
+4. **TOCTOU** en el guard en memoria `RUNNING` -- dos POST casi simultáneos a `/sweep/<name>/run`
+   podían lanzar el mismo sweep dos veces vía el runner local.
+5. **Aviso de `ngentot` excesivo no llegaba a la UI** -- solo se imprimía en la consola del proceso
+   Flask; causó el incidente real de Fase 87 (`test3`/`KN-K17`, `ngentot=1000000`, corrió sin aviso
+   visible en el navegador).
+
+### Cambio real
+
+**(1+2) Validador de segmentos de ruta**: `sweep_generate.SAFE_SEGMENT_PATTERN` (constante nueva,
+mismo patrón que ya usaba `SWEEP_NAME_RE` al crear un sweep) es ahora la única fuente de verdad,
+importada por `webapp/app.py` para registrar un convertidor de ruta Werkzeug custom (`safe`,
+`app.url_map.converters["safe"]`). Todas las rutas de los hallazgos 1 y 2 pasaron de `<name>`/
+`<run_hash>`/`<dataset_hash>`/`<sweep>` a `<safe:...>` -- un segmento que no matchea da 404 de Flask
+**antes** de que corra el cuerpo de la vista (nunca llega a construirse el `Path` sospechoso), sin
+repetir un `if` de validación en cada ruta. `filename` en `/qc/...` queda como `<string>` normal --
+ya lo protegía `send_from_directory`.
+
+**(3) `deploy_local.sh`**: el comando remoto ahora se arma con `printf %q` (citado robusto de shell,
+no solo comillas dobles) en vez de interpolación directa. `sweep_launch.py::__main__` exige
+`len(_args) == 1` -- pasar `--dry-run` vacío como argumento literal rompía ese chequeo, así que el
+flag solo se agrega al comando cuando NO está vacío.
+
+**(4) `RUNNING_LOCK`**: `threading.Lock()` nuevo envolviendo el check-y-registro (`is_alive()` +
+`RUNNING[name] = thread` + `thread.start()`) de la rama sin SLURM de `sweep_run()`, atómico ahora.
+La rama con `sbatch` no lo necesita (sin estado en memoria compartido ahí).
+
+**(5) Aviso de `ngentot`**: `/generate` ahora lee el `manifest.json` recién compilado, junta las
+clases cuyo `ngentot` (ya resuelto por `build_runs()`, cubre overrides y defaults) supera
+`sweep_compile.NGENTOT_WARN_THRESHOLD`, y hace `flash()` con un aviso explícito antes del redirect.
+
+### Validación real
+
+Cada arreglo se probó con una prueba funcional real, no solo revisión de código -- incluyendo
+**controles negativos** que confirman que los bugs viejos eran genuinamente explotables antes del fix:
+
+- **(1+2)** `app.py` real importado (con un stub liviano de `run_simsed_poc` -- la pila completa de
+  LightCurveLynx no es instalable en esta máquina Windows) y probado con `Flask.test_client()` real:
+  un nombre legítimo (`test1`) sigue llegando a la vista (404 "de negocio", JSON); `/sweep/../status`,
+  `/sweep/foo%2Fbar/status`, `/qc/../../../../etc/x/passwd` y `/datasets/..` dan 404 **genérico de
+  Werkzeug** (rechazados a nivel de ruta, sin ejecutar ninguna vista).
+- **(3)** `ssh` real reemplazado por un script que ejecuta el comando recibido vía `sh -c` (simula lo
+  que haría el login node real): con el código viejo (sin comillas), un `$SWEEP_YAML` malicioso
+  (`sweeps/x.yaml; touch ...; echo`) creó un archivo marcador real -- **confirmado explotable**. Con
+  el fix (`printf %q`), el mismo valor malicioso llega como un solo argumento literal a
+  `sweep_launch.py` (`sweeps/x.yaml\;\ touch\ ...\;\ echo`), el marcador nunca se crea. Casos
+  normales (con y sin `--dry-run`) producen el comando esperado.
+- **(4)** 8 `POST` concurrentes reales (hilos Python) a `/sweep/<name>/run` contra el mismo sweep,
+  con `sweep_run_local.run_sweep_local` reemplazado por un stub que tarda 0.3s: con el fix,
+  `run_sweep_local` se dispara **exactamente 1 vez**. Control negativo (mismo test con
+  `RUNNING_LOCK` reemplazado por un no-op): se disparó **5 veces** -- confirma que el test detecta la
+  carrera de verdad, no es un falso negativo.
+- **(5)** `/generate` real, con `sweep_compile.compile_sweep` devolviendo un manifiesto con una clase
+  sobre el umbral: el `flash()` con "ATENCION" aparece en la sesión tras el POST. Con un manifiesto
+  sin excesos, sesión limpia, ningún aviso.
+
+Fuera de alcance de esta fase (decisión explícita del usuario): autenticación real -- la app sigue
+sin login, pensada para un solo usuario en `127.0.0.1`; en un login node compartido de NLHPC esto
+sigue significando que cualquier otro usuario con shell ahí puede llegar al puerto directamente, sin
+pasar por el túnel SSH de nadie. Documentado, no arreglado.
+
+### Archivos de esta fase
+
+Modificado: `sweep_generate.py` (`SAFE_SEGMENT_PATTERN`), `webapp/app.py` (`SafeSegmentConverter`,
+rutas `<safe:...>`, `RUNNING_LOCK`, aviso de `ngentot` en `/generate`), `deploy_local.sh` (quoting
+robusto). `NOTES.md`: esta entrada.

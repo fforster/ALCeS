@@ -32,7 +32,13 @@ from sweep_compile import NGENTOT_WARN_THRESHOLD
 from sweep_history import record_event
 
 SWEEPS_DIR = HERE / "sweeps"
-SWEEP_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+# Fase 92: patron reusado tal cual por webapp/app.py (SafeSegmentConverter)
+# para validar CUALQUIER segmento de URL que se use para construir un Path
+# (sweep name, run_hash, dataset_hash) -- una sola fuente de verdad en vez
+# de repetir el regex en cada lado. No cambia el comportamiento de
+# SWEEP_NAME_RE, que ya usaba este mismo patron antes de esta fase.
+SAFE_SEGMENT_PATTERN = r"[A-Za-z0-9_-]{1,64}"
+SWEEP_NAME_RE = re.compile(f"^{SAFE_SEGMENT_PATTERN}$")
 
 # SNIa/SALT2 vive en run_snia_ddf_poc.py, fuera del sistema de sweeps por
 # decision ya tomada en Fase 73 (no se generaliza el sweep a esa clase ni

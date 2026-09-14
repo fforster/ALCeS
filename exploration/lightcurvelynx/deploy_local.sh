@@ -42,5 +42,16 @@ scp "$LOCAL_DIR"/sweep_*.py "$REMOTE_HOST:$REMOTE_ROOT/"
 scp "$LOCAL_DIR/$SWEEP_YAML" "$REMOTE_HOST:$REMOTE_ROOT/$(dirname "$SWEEP_YAML")/"
 
 echo "» disparando compile+launch remoto ..."
-ssh "$REMOTE_HOST" "cd $REMOTE_ROOT && module load python/3.12.3-legacy-skylake && \
-    source venv/bin/activate && python3 sweep_launch.py $SWEEP_YAML $DRY_RUN_FLAG"
+# Fase 92 (hardening): antes, $SWEEP_YAML/$DRY_RUN_FLAG se interpolaban sin
+# comillas propias en el comando remoto -- un valor con metacaracteres de
+# shell (";", "&&", backticks, "$()") se ejecutaba tal cual en el login
+# node. `printf %q` cita cada valor de forma robusta. sweep_launch.py hace
+# `if len(_args) != 1: ...` (ver su __main__) -- pasarle un `--dry-run`
+# vacio como argumento literal rompe ese chequeo, asi que el flag solo se
+# agrega al comando cuando NO esta vacio, nunca como cadena vacia citada.
+REMOTE_CMD=$(printf 'cd %q && module load python/3.12.3-legacy-skylake && source venv/bin/activate && python3 sweep_launch.py %q' \
+    "$REMOTE_ROOT" "$SWEEP_YAML")
+if [ -n "$DRY_RUN_FLAG" ]; then
+  REMOTE_CMD="$REMOTE_CMD $(printf '%q' "$DRY_RUN_FLAG")"
+fi
+ssh "$REMOTE_HOST" "$REMOTE_CMD"
