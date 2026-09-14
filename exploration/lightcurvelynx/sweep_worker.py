@@ -72,6 +72,9 @@ def run_one(manifest_path: Path, index: int) -> int:
         slurm_job_id=os.environ.get("SLURM_JOB_ID"),
         slurm_array_job_id=os.environ.get("SLURM_ARRAY_JOB_ID"),
         slurm_array_task_id=os.environ.get("SLURM_ARRAY_TASK_ID"),
+        # Fase 93: .get(), no row[...] -- un manifest compilado antes de
+        # esta fase no tiene esta clave, no debe romper un worker nuevo.
+        z_max_override=row.get("z_max_override"),
     )
 
     started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -91,6 +94,7 @@ def run_one(manifest_path: Path, index: int) -> int:
             wfd=row["wfd"],
             simsed_t0_mode=row["simsed_t0_mode"],
             out_dir_override=output_dir,
+            z_max_override=row.get("z_max_override"),
         )
     except OSError as e:
         # errno 122 = EDQUOT (disk quota exceeded) -- incidente real

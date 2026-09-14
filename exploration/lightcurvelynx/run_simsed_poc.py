@@ -414,6 +414,51 @@ CLASS_CONFIGS = {
 }
 
 
+def resolve_effective_class_config(class_key: str, z_max_override: float | None = None) -> dict:
+    """Fase 93: cfg EFECTIVO de una clase -- z_min NUNCA se overridea
+    (siempre el nominal del catalogo, decision de producto de esta fase).
+
+    Sin override (z_max_override=None): devuelve CLASS_CONFIGS[class_key]
+    TAL CUAL (el mismo objeto, no una copia) -- no-op garantizado por
+    identidad, no solo por igualdad de valores, para que
+    sweep_hash.run_hash() de un sweep sin z_max_overrides siga dando
+    EXACTAMENTE el mismo hash que antes de esta fase (ningun sweep viejo
+    se invalida).
+
+    Con override: copia superficial de cfg (nunca muta CLASS_CONFIGS
+    original) con genrange_redshift=(z_min_nominal, z_max_override). Si
+    dndz[0] == "powerlaw" (SNIa-91bg, SNIa-91bg-elastic, KN-K17,
+    KN-BULLA19 -- las 4 unicas clases del catalogo con ese dndz_kind),
+    TAMBIEN parchea el z_hi del ultimo segmento al mismo valor -- sin
+    esto, build_dndz_powerlaw2_cdf()/rate_at() (snana_params.py) devuelve
+    densidad CERO mas alla del z_hi viejo del segmento (que en las 4
+    clases es identico al z_max nominal), y el override quedaria
+    silenciosamente SIN EFECTO REAL: el grid de muestreo se extiende pero
+    el sampler nunca devuelve valores en la extension. Las otras 4 formas
+    de dndz (md14/ccs15/tde/pisn) no tienen este limite duplicado.
+
+    Levanta ValueError si z_max_override <= z_min nominal de la clase --
+    el rango resultante no puede quedar vacio o invertido."""
+    cfg = CLASS_CONFIGS[class_key]
+    if z_max_override is None:
+        return cfg
+    z_min_nominal, _z_max_nominal = cfg["genrange_redshift"]
+    if not (z_max_override > z_min_nominal):
+        raise ValueError(
+            f"z_max_override={z_max_override} invalido para '{class_key}': debe ser mayor que "
+            f"z_min nominal ({z_min_nominal}) -- z_min no es overrideable (Fase 93)."
+        )
+    effective = dict(cfg)
+    effective["genrange_redshift"] = (z_min_nominal, float(z_max_override))
+    dndz_kind, dndz_params = cfg["dndz"]
+    if dndz_kind == "powerlaw":
+        segments = [tuple(s) for s in dndz_params]
+        rate0, beta, z_lo, _z_hi_old = segments[-1]
+        segments[-1] = (rate0, beta, z_lo, float(z_max_override))
+        effective["dndz"] = ("powerlaw", segments)
+    return effective
+
+
 def snana_noise_columns(df_ddf: pd.DataFrame) -> pd.DataFrame:
     snana = format_obs(df_ddf, pixsize=PIXSIZE)
     sig_psf_arcsec = df_ddf["seeingFwhmEff"].to_numpy() / (2 * np.sqrt(2 * np.log(2)))
@@ -792,7 +837,8 @@ def build_source_model(cfg: dict, obs_table: OpSim, seed_base: int, t_start: flo
 
 
 def main(class_key: str, ngentot_override: int | None = None, seed_index: int = 0, wfd: bool = False,
-         simsed_t0_mode: str = "bolometric_peak", out_dir_override: Path | str | None = None):
+         simsed_t0_mode: str = "bolometric_peak", out_dir_override: Path | str | None = None,
+         z_max_override: float | None = None):
     # Fase 57: default de PRODUCCION cambia a "bolometric_peak" (Fase 56) --
     # piloto real (CaRT, 1 semilla, la clase con mayor shift del catalogo)
     # midio impacto minimo en deteccion (167->164 de 1998 objetos, SNR
@@ -803,7 +849,15 @@ def main(class_key: str, ngentot_override: int | None = None, seed_index: int = 
     # importante los ratios de deteccion ya medidos. build_source_model()
     # mantiene su propio default "raw" (sin cambios) -- este override es
     # especifico de main()/produccion, ver NOTES.md Fase 57.
-    cfg = CLASS_CONFIGS[class_key]
+    # Fase 93: cfg_nominal (SIEMPRE el catalogo, sin override -- se usa
+    # solo para reportar z_min/max_nominal en summary.json mas abajo) vs
+    # cfg (el EFECTIVO, con z_max parchado si hay override -- se usa para
+    # TODO lo demas: simsed_dir, redcor_params, host_av, sntype,
+    # trest_range, y el sampler de redshift real). Si se colapsaran en una
+    # sola variable, summary.json reportaria el override como si fuera el
+    # nominal del catalogo -- ver resolve_effective_class_config().
+    cfg_nominal = CLASS_CONFIGS[class_key]
+    cfg = resolve_effective_class_config(class_key, z_max_override)
     # la mayoria de las clases DDF usan NGENTOT_LC=2000 (pipeline/models.yaml:
     # ngen_ddf), pero PISN-STELLA-HYDROGENIC es la excepcion real (ngen_ddf:
     # 20000) -- cfg["ngentot_lc"] la overridea; ngentot_override (usado por
@@ -1011,7 +1065,9 @@ def main(class_key: str, ngentot_override: int | None = None, seed_index: int = 
     # duplicar el calculo.
     sys.path.insert(0, str(REPO_ROOT))
     from pipeline.postproc import qc
-    z_min_nominal, z_max_nominal = cfg["genrange_redshift"]
+    # Fase 93: cfg_nominal (NO cfg) -- z_min/max_nominal siempre reportan el
+    # catalogo real, nunca el override (ver comentario en la firma de main()).
+    z_min_nominal, z_max_nominal = cfg_nominal["genrange_redshift"]
     zmax_stats = qc.redshift_zmax_stats(dump_df, head_df_detected)
 
     (out_dir / "summary.json").write_text(json.dumps({
@@ -1034,6 +1090,10 @@ def main(class_key: str, ngentot_override: int | None = None, seed_index: int = 
         "z_max_nominal": z_max_nominal,
         "z_max_simulado": zmax_stats.get("z_max_simulado"),
         "z_max_detectado": zmax_stats.get("z_max_detectado"),
+        # Fase 93: el override que efectivamente se le pidio al sampler para
+        # esta corrida -- None si no hubo (comportamiento identico a antes
+        # de esta fase).
+        "z_max_override": z_max_override,
     }, indent=2))
 
     qc_dir = out_dir / "qc"
@@ -1067,8 +1127,24 @@ if __name__ == "__main__":
     _wfd = "--wfd" in _args
     if _wfd:
         _args = [a for a in _args if a != "--wfd"]
+    # Fase 93: --z-max <valor> opcional, mismo criterio que --wfd (se
+    # extrae de sys.argv antes de los posicionales) -- para probar el
+    # override de z_max a mano sin pasar por sweep_worker.py.
+    _z_max_override = None
+    if "--z-max" in _args:
+        _i = _args.index("--z-max")
+        if _i + 1 >= len(_args):
+            print("uso: --z-max requiere un valor, p.ej. --z-max 0.9")
+            sys.exit(1)
+        try:
+            _z_max_override = float(_args[_i + 1])
+        except ValueError:
+            print(f"uso: --z-max invalido: '{_args[_i + 1]}'")
+            sys.exit(1)
+        _args = _args[:_i] + _args[_i + 2:]
     if len(_args) not in (1, 2) or _args[0] not in CLASS_CONFIGS:
-        print(f"uso: python3 run_simsed_poc.py <clase> [seed_index] [--wfd]  (opciones: {list(CLASS_CONFIGS)})")
+        print(f"uso: python3 run_simsed_poc.py <clase> [seed_index] [--wfd] [--z-max <valor>]  "
+              f"(opciones: {list(CLASS_CONFIGS)})")
         sys.exit(1)
     _seed_index = int(_args[1]) if len(_args) == 2 else 0
-    main(_args[0], seed_index=_seed_index, wfd=_wfd)
+    main(_args[0], seed_index=_seed_index, wfd=_wfd, z_max_override=_z_max_override)

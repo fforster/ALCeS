@@ -9865,3 +9865,99 @@ pasar por el túnel SSH de nadie. Documentado, no arreglado.
 Modificado: `sweep_generate.py` (`SAFE_SEGMENT_PATTERN`), `webapp/app.py` (`SafeSegmentConverter`,
 rutas `<safe:...>`, `RUNNING_LOCK`, aviso de `ngentot` en `/generate`), `deploy_local.sh` (quoting
 robusto). `NOTES.md`: esta entrada.
+
+## Fase 93 -- override de z_max por sweep/clase, configurable en la pantalla de generación (pedido real del usuario)
+
+### Motivación
+
+El usuario, tras ver el z máximo ya alcanzado por sus sweeps (Fase 90), pidió ir un paso más allá:
+poder **reconfigurar** el z máximo que se le pide al simulador para un sweep nuevo. `genrange_redshift
+= (z_min, z_max)` era un valor fijo por clase en `CLASS_CONFIGS` (`run_simsed_poc.py`), sin ningún
+mecanismo de override -- a diferencia de `ngentot`, que sí tiene `ngentot_overrides` de punta a
+punta. Alcance acordado: solo `z_max` es overrideable (z_min queda siempre en el nominal del
+catálogo).
+
+### Trampa real encontrada y evitada
+
+4 de las 15 clases (`SNIa-91bg`, `SNIa-91bg-elastic`, `KN-K17`, `KN-BULLA19`) tienen
+`dndz=("powerlaw", [(rate0, beta, z_lo, z_hi)])` donde el `z_hi` del segmento está **duplicado** --
+idéntico al `z_max` de `genrange_redshift`. `build_dndz_powerlaw2_cdf` (`snana_params.py`) usa
+`z_min`/`z_max` solo para el grid, pero `rate_at(z)` devuelve densidad **cero** para cualquier z
+fuera de `[z_lo, z_hi)` de los segmentos -- overridear solo `genrange_redshift` sin también extender
+el `z_hi` del segmento habría dejado el override **sin efecto real** para esas 4 clases (confirmado
+numéricamente, ver Validación).
+
+### Cambio real
+
+`run_simsed_poc.py`: `resolve_effective_class_config(class_key, z_max_override=None)` nueva -- sin
+override devuelve `CLASS_CONFIGS[class_key]` TAL CUAL (mismo objeto, no-op garantizado por
+identidad, no solo por igualdad de valores -- clave para que `sweep_hash.run_hash()` de un sweep sin
+`z_max_overrides` siga dando el MISMO hash que antes de esta fase); con override, copia con
+`genrange_redshift` parchado y, si `dndz[0]=="powerlaw"`, también el `z_hi` del último segmento.
+`main()` ahora distingue `cfg_nominal` (SIEMPRE `CLASS_CONFIGS[class_key]`, usado solo para
+`z_min_nominal`/`z_max_nominal` en `summary.json`) de `cfg` (el EFECTIVO, usado para todo lo demás,
+incluido el sampler real) -- sin esta separación, `summary.json` habría reportado el override como
+si fuera el nominal del catálogo. Nuevo campo `z_max_override` en `summary.json`. Flag `--z-max
+<valor>` opcional en el CLI standalone.
+
+`sweep_compile.py::build_runs()`: lee `z_max_overrides` del YAML (mismo patrón que
+`ngentot_overrides`), resuelve el cfg efectivo vía el helper y lo pasa a `sweep_hash.run_hash()` --
+el `run_hash` cambia solo cuando el override es real. Campo `z_max_override` nuevo en cada row del
+manifiesto.
+
+`sweep_worker.py::run_one()`: pasa `row.get("z_max_override")` a `run_simsed_main` y a `common`
+(`run_hash.json`).
+
+`sweep_generate.py`: `available_classes_redshift_range()` nueva (expone el nominal por clase);
+`generate_sweep()` con parámetro `z_max_overrides`, validado (reusa el mismo helper, sin duplicar la
+regla `z_max > z_min`) ANTES de escribir el YAML; nueva sección `z_max_overrides` en el YAML
+(mismo agrupamiento que `ngentot_overrides`); `--z-max clase:numero` en el CLI.
+
+`webapp/app.py` + `index.html`: input `z_max_<clase>` opcional por clase, con el nominal como
+referencia (`z_ranges`, expuesto por `index()`); `generate()` parsea y valida el formato numérico
+(la validación real `z_max > z_min` vive en `generate_sweep()`, no duplicada); flash de
+transparencia ("z_max override aplicado para: ...") cuando corresponde, mismo espíritu que el aviso
+de `ngentot` de Fase 92.
+
+### Validación real
+
+Sin acceso local a la pila completa de LightCurveLynx, se verificó cada pieza con el **código y los
+datos REALES** del repo (no solo sintéticos) -- extrayendo `CLASS_CONFIGS`/`resolve_effective_class_
+config`/`build_dndz_powerlaw2_cdf` vía `ast` directo del archivo fuente (sin ejecutar los imports
+pesados de `lightcurvelynx`) y usando módulos stub solo para esa dependencia puntual:
+
+- **No-op real**: para las 15 clases reales del catálogo, `resolve_effective_class_config(c, None)`
+  devuelve el mismo objeto que `CLASS_CONFIGS[c]` (identidad, no solo igualdad).
+- **Backward-compat real de `run_hash`**: para 4 clases reales (incluye powerlaw y no-powerlaw),
+  `sweep_hash.run_hash()` da el hash IDÉNTICO con y sin pasar por el helper (sin override).
+- **Sensibilidad real del hash**: con override real, el hash cambia -- sin colisión con la corrida
+  nominal, confirmado en 3 clases.
+- **Repro real de la trampa evitada**: `build_dndz_powerlaw2_cdf` real (con `astropy`/`scipy`
+  instalados para la prueba) confirma que, sin parchear el segmento, la masa de probabilidad más allá
+  del `z_hi` viejo es **0.000000** (el bug); parchando el segmento (lo que hace el helper), la misma
+  extensión tiene **64.7%** de masa real -- diferencia inequívoca.
+- **`sweep_compile.build_runs()` real**: sin `z_max_overrides`, todas las rows quedan con
+  `z_max_override=None`; con override en una clase, se propaga solo a esa clase, y su `run_hash` da
+  DISTINTO del que tendría sin override; un override inválido (`z_max <= z_min`) propaga `ValueError`
+  con mensaje claro.
+- **`sweep_generate.generate_sweep()` real**: el YAML generado trae `z_max_overrides` en la posición
+  correcta (entre `ngentot_overrides` y `resources`); override inválido falla ANTES de escribir el
+  YAML; sin overrides, el YAML trae `z_max_overrides: {}` (backward-compat).
+- **Webapp real de punta a punta** (`Flask.test_client()`, `app.py` real cargado): `GET /` muestra el
+  input `z_max_KN-K17` con "nominal: 0.280" y "z_min fijo en 0.011" (datos reales de `CLASS_CONFIGS`);
+  `POST /generate` con `z_max_KN-K17=0.5` dispara el flash de transparencia real y produce un
+  `manifest.json` REAL en disco (vía `sweep_compile.compile_sweep()` real, sin mockear) con
+  `runs[0]["z_max_override"] == 0.5`; un valor no numérico da el flash de error esperado; sin
+  override, ningún flash de `z_max`.
+
+Pendiente: correr una simulación real en NLHPC con `z_max_overrides` (ver si `z_max_simulado`
+efectivamente supera el `z_max_nominal` para una clase powerlaw) -- mismo patrón que el cierre de
+Fase 90.
+
+### Archivos de esta fase
+
+Modificado: `run_simsed_poc.py` (`resolve_effective_class_config` nueva, `main()` con
+`z_max_override`/`cfg_nominal`, `summary.json`, flag `--z-max`), `sweep_compile.py::build_runs()`,
+`sweep_worker.py::run_one()`, `sweep_generate.py` (`available_classes_redshift_range()`,
+`generate_sweep()`, CLI `--z-max`), `webapp/app.py` (`index()`, `generate()`),
+`webapp/templates/index.html`. `NOTES.md`: esta entrada.

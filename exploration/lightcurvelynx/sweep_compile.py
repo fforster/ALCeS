@@ -26,7 +26,7 @@ import yaml
 
 import sweep_hash
 from sweep_history import record_event
-from run_simsed_poc import CLASS_CONFIGS, HERE, NGENTOT_LC
+from run_simsed_poc import CLASS_CONFIGS, HERE, NGENTOT_LC, resolve_effective_class_config
 
 SWEEP_RUNS_DIR = HERE / "sweep_runs"
 # Fase 66, riesgo #5 del plan: un YAML mal editado puede disparar N jobs
@@ -56,6 +56,10 @@ def build_runs(sweep_cfg: dict, code_hash_value: str) -> list[dict]:
     seeds = sweep_cfg["seeds"]
     modes = sweep_cfg.get("modes") or [{"wfd": False, "simsed_t0_mode": "bolometric_peak"}]
     ngentot_overrides = sweep_cfg.get("ngentot_overrides") or {}
+    # Fase 93: mapa plano class_key -> z_max (float), mismo patron que
+    # ngentot_overrides -- clase sin entrada = sin override, usa el
+    # genrange_redshift nominal de CLASS_CONFIGS sin cambios.
+    z_max_overrides = sweep_cfg.get("z_max_overrides") or {}
     resources = sweep_cfg.get("resources") or {"default": {"mem": "16G", "time": "02:00:00", "cpus": 4}}
 
     unknown = [c for c in classes if c not in CLASS_CONFIGS]
@@ -66,7 +70,16 @@ def build_runs(sweep_cfg: dict, code_hash_value: str) -> list[dict]:
 
     rows = []
     for class_key in classes:
-        cfg = CLASS_CONFIGS[class_key]
+        z_max_override = z_max_overrides.get(class_key)
+        # Fase 93: cfg EFECTIVO (con z_max parchado si hay override, ver
+        # resolve_effective_class_config) -- es lo que se pasa a
+        # sweep_hash.run_hash() mas abajo, asi el run_hash cambia solo
+        # cuando el override es real (sin override, es el mismo objeto
+        # CLASS_CONFIGS[class_key] de siempre -- mismo hash que antes de
+        # esta fase). Puede levantar ValueError (override invalido, p.ej.
+        # z_max <= z_min nominal) -- se deja propagar, mismo criterio que
+        # el chequeo de "clases desconocidas" de arriba.
+        cfg = resolve_effective_class_config(class_key, z_max_override)
         tier = resolve_tier(class_key, resources)
         ngentot = ngentot_overrides.get(class_key, cfg.get("ngentot_lc", NGENTOT_LC))
         if ngentot > NGENTOT_WARN_THRESHOLD:
@@ -84,7 +97,7 @@ def build_runs(sweep_cfg: dict, code_hash_value: str) -> list[dict]:
                 rows.append(dict(
                     run_hash=short, run_hash_full=full, class_key=class_key,
                     seed_index=seed_index, wfd=wfd, simsed_t0_mode=simsed_t0_mode,
-                    ngentot=ngentot, tier=tier,
+                    ngentot=ngentot, tier=tier, z_max_override=z_max_override,
                 ))
 
     # agrupar por tier ANTES de asignar indice -- asi cada tier obtiene un

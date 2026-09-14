@@ -15,6 +15,9 @@
         <div class="class-row">
           <label><input type="checkbox" name="classes" value="{{ c }}"> {{ c }}</label>
           <label>ngentot: <input type="number" name="ngentot_{{ c }}" placeholder="default del catálogo" min="1" style="width:9rem"></label>
+          <label>z_max: <input type="number" step="any" name="z_max_{{ c }}"
+              placeholder="nominal: {{ '%.3f'|format(z_ranges[c][1]) }}" style="width:9rem"></label>
+          <span class="hint">z_min fijo en {{ '%.3f'|format(z_ranges[c][0]) }} (no overrideable)</span>
         </div>
       {% endfor %}
     {% else %}

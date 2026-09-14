@@ -101,7 +101,12 @@ def slurm_available() -> bool:
 
 @app.route("/")
 def index():
-    return render_template("index.html", classes=sweep_generate.available_classes())
+    return render_template(
+        "index.html", classes=sweep_generate.available_classes(),
+        # Fase 93: z_max nominal por clase, para mostrarlo como referencia
+        # junto al input de override.
+        z_ranges=sweep_generate.available_classes_redshift_range(),
+    )
 
 
 @app.route("/sweeps")
@@ -155,6 +160,24 @@ def generate():
                 flash(f"ngentot invalido para '{class_key}': '{raw}'")
                 return redirect(url_for("index"))
 
+    # Fase 93: override de z_max por clase -- z_min queda siempre en el
+    # nominal del catalogo (no overrideable). La validacion real (z_max >
+    # z_min nominal, y ademas parcha el z_hi duplicado de las clases
+    # "powerlaw" para que el override tenga efecto real, ver
+    # resolve_effective_class_config()) NO se duplica aca -- ya la hace
+    # sweep_generate.generate_sweep() mas abajo, y su ValueError cae en el
+    # except (ValueError, FileExistsError) que ya existe unas lineas mas
+    # abajo. Aca solo se valida que el campo sea un numero.
+    z_max_overrides = {}
+    for class_key in classes:
+        raw = form.get(f"z_max_{class_key}", "").strip()
+        if raw:
+            try:
+                z_max_overrides[class_key] = float(raw)
+            except ValueError:
+                flash(f"z_max invalido para '{class_key}': '{raw}'")
+                return redirect(url_for("index"))
+
     # DDF y WFD son casillas independientes -- marcar las dos genera un
     # `mode` por cada una en el mismo sweep (sweep_compile.py::build_runs()
     # ya itera sobre una lista de modos, esto no es una capacidad nueva,
@@ -190,6 +213,7 @@ def generate():
             classes=classes,
             seeds=seeds,
             ngentot_overrides=ngentot_overrides,
+            z_max_overrides=z_max_overrides,
             modes=modes,
             resources=resources,
             max_concurrent=max_concurrent,
@@ -223,6 +247,17 @@ def generate():
             f"({sweep_compile.NGENTOT_WARN_THRESHOLD}) para: {', '.join(over_threshold)} -- "
             f"confirmar que es intencional antes de apretar 'Lanzar'."
         )
+
+    # Fase 93: aviso de transparencia -- mismo espiritu que el de ngentot
+    # arriba, confirma en la UI que el override de z_max efectivamente se
+    # aplico (y con que valor), no solo en la consola.
+    overridden_zmax = sorted({
+        r["class_key"] for r in manifest["runs"] if r.get("z_max_override") is not None
+    })
+    if overridden_zmax:
+        detail = ", ".join(f"{c} (z_max={z_max_overrides[c]})" for c in overridden_zmax)
+        flash(f"z_max override aplicado para: {detail}")
+
     return redirect(url_for("sweep_status", name=form.get("sweep_name")))
 
 

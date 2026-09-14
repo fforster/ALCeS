@@ -27,7 +27,7 @@ from pathlib import Path
 
 import yaml
 
-from run_simsed_poc import CLASS_CONFIGS, HERE
+from run_simsed_poc import CLASS_CONFIGS, HERE, resolve_effective_class_config
 from sweep_compile import NGENTOT_WARN_THRESHOLD
 from sweep_history import record_event
 
@@ -59,6 +59,14 @@ def available_classes() -> list[str]:
     return sorted(out)
 
 
+def available_classes_redshift_range() -> dict[str, tuple[float, float]]:
+    """Fase 93: (z_min, z_max) NOMINAL de GENRANGE_REDSHIFT por cada clase
+    de available_classes() -- para que index.html muestre el z_max nominal
+    como referencia junto al input de override, sin duplicar CLASS_CONFIGS
+    del lado de la webapp (una sola fuente de verdad: run_simsed_poc.py)."""
+    return {c: CLASS_CONFIGS[c]["genrange_redshift"] for c in available_classes()}
+
+
 def validate_classes(classes: list[str]) -> list[str]:
     """Devuelve una lista de mensajes de error (vacia si todo esta OK).
     Dos causas raiz reales distintas, dos mensajes distintos -- no un
@@ -87,6 +95,7 @@ def generate_sweep(
     classes: list[str],
     seeds: list[int],
     ngentot_overrides: dict[str, int] | None = None,
+    z_max_overrides: dict[str, float] | None = None,
     modes: list[dict] | None = None,
     resources: dict | None = None,
     max_concurrent: dict | None = None,
@@ -124,6 +133,21 @@ def generate_sweep(
         if ngentot > NGENTOT_WARN_THRESHOLD:
             print(f"  ! ADVERTENCIA: {class_key} ngentot={ngentot} supera el umbral historico "
                   f"de este proyecto ({NGENTOT_WARN_THRESHOLD}) -- confirmar que es intencional.")
+
+    # Fase 93: validar los overrides de z_max ANTES de escribir el YAML
+    # (falla rapido, mismo criterio que validate_classes() arriba) --
+    # reusa resolve_effective_class_config() como unico validador real
+    # (z_max > z_min nominal), sin duplicar esa regla aca.
+    z_max_overrides = dict(z_max_overrides or {})
+    z_max_errors = []
+    for class_key, z_max in z_max_overrides.items():
+        try:
+            resolve_effective_class_config(class_key, z_max)
+        except (KeyError, ValueError) as e:
+            z_max_errors.append(str(e))
+    if z_max_errors:
+        raise ValueError("z_max_overrides invalidos:\n  - " + "\n  - ".join(z_max_errors))
+
     if keep_phot:
         print("  ! ADVERTENCIA: keep_phot=true preserva phot_df.parquet de cada corrida (no se "
               "borra por cuota de disco, ver NOTES.md Fase 8/59/65/81) -- verificar headroom real "
@@ -138,6 +162,7 @@ def generate_sweep(
         "modes": modes or [{"wfd": False, "simsed_t0_mode": "bolometric_peak"}],
         "classes": list(classes),
         "ngentot_overrides": ngentot_overrides,
+        "z_max_overrides": z_max_overrides,
         "resources": resources or {"default": {"mem": "8G", "time": "00:15:00", "cpus": 2}, "overrides": {}},
         "max_concurrent": max_concurrent or {"default": 2},
         "partition": partition,
@@ -158,7 +183,7 @@ def generate_sweep(
     record_event(
         "generate_sweep", triggered_by=triggered_by, sweep_name=sweep_name,
         classes=list(classes), seeds=list(seeds), ngentot_overrides=ngentot_overrides,
-        keep_phot=bool(keep_phot),
+        z_max_overrides=z_max_overrides, keep_phot=bool(keep_phot),
     )
     return out_path
 
@@ -173,12 +198,26 @@ def _parse_ngentot(pairs: list[str]) -> dict[str, int]:
     return out
 
 
+def _parse_z_max(pairs: list[str]) -> dict[str, float]:
+    """Fase 93: mismo formato/patron que _parse_ngentot(), 'clase:numero',
+    pero float en vez de int (z_max no es un conteo entero)."""
+    out = {}
+    for p in pairs:
+        class_key, _, value = p.partition(":")
+        if not value:
+            raise argparse.ArgumentTypeError(f"--z-max espera 'clase:numero', recibido '{p}'")
+        out[class_key] = float(value)
+    return out
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--name", dest="sweep_name")
     parser.add_argument("--classes", nargs="+")
     parser.add_argument("--seeds", nargs="+", type=int)
     parser.add_argument("--ngentot", nargs="*", default=[], help="pares clase:numero, p.ej. SNIa-91bg:500")
+    parser.add_argument("--z-max", nargs="*", default=[], dest="z_max",
+                         help="pares clase:numero (override de z_max, z_min queda fijo), p.ej. KN-K17:0.5")
     parser.add_argument("--wfd", action="store_true")
     parser.add_argument("--keep-phot", action="store_true", dest="keep_phot")
     parser.add_argument("--description", default="")
@@ -197,6 +236,7 @@ if __name__ == "__main__":
     generate_sweep(
         sweep_name=args.sweep_name, classes=args.classes, seeds=args.seeds,
         ngentot_overrides=_parse_ngentot(args.ngentot),
+        z_max_overrides=_parse_z_max(args.z_max),
         modes=[{"wfd": args.wfd, "simsed_t0_mode": "bolometric_peak"}],
         keep_phot=args.keep_phot, description=args.description, force=args.force,
     )
