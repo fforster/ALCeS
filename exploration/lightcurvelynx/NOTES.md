@@ -9699,9 +9699,17 @@ cada pieza nueva con datos sintéticos reales en vez de solo revisión de códig
 - `sweeps_list.html`/`sweep_status.html`: renderizado real vía Jinja2 (con y sin `zmax`) confirma que
   el HTML final trae el número formateado y el fallback `—` cuando corresponde.
 
-Pendiente: correr un sweep real en NLHPC (donde sí está la pila completa) para confirmar
-`summary.json`/`aggregated_summary.parquet` en un caso real end-to-end -- ver despliegue de esta
-fase.
+**Cerrado real en NLHPC** (post-despliegue): sweep `zmax_verify_fase90` (`SNIa-91bg`, `ngentot=30`,
+DDF), sometido a SLURM real (job `13007670`, partición `largemem`) y terminado `done`. Su
+`summary.json` real:
+```
+"z_min_nominal": 0.011, "z_max_nominal": 0.6,
+"z_max_simulado": 0.5970969788664039, "z_max_detectado": 0.5850150369767873
+```
+`z_min/max_nominal` coincide exacto con `CLASS_CONFIGS["SNIa-91bg"]["genrange_redshift"]`;
+`z_max_detectado <= z_max_simulado <= z_max_nominal`, como debía ser. `sweep_aggregate.sweep_zmax
+("zmax_verify_fase90")` devuelve el mismo `z_max_simulado`/`z_max_detectado` -- confirma la cadena
+completa run_simsed_poc.py -> summary.json -> sweep_zmax con datos 100% reales, no sintéticos.
 
 ### Archivos de esta fase
 
@@ -9759,9 +9767,15 @@ verificó sintácticamente válido como JS real (Node, no solo lectura visual). 
 se renderizó vía Jinja2 real con una fila `done` con QC -- confirma que aparecen los `<img>` y el
 `<div id="live-panel">`.
 
-Pendiente: verificación en navegador real (vía túnel SSH a NLHPC) con un sweep corriendo de verdad,
-para confirmar el comportamiento visual y el timing de red (`/status` cada 3s, `/panel` solo al
-cambiar `n_done`) -- ver despliegue de esta fase.
+**Cerrado parcial en NLHPC real** (post-despliegue, vía `curl` por el túnel SSH, no un navegador
+interactivo): `/sweeps` del servidor real muestra la columna `z_max`; `/sweep/fase65_rebarrido/panel`
+(65 corridas `done` reales, `summary.json` de antes de esta fase) devuelve `efficiency_rows` reales
+correctos, uno por corrida, calculados de verdad desde disco -- confirma que `build_live_panel`
+funciona contra datos de producción, no solo sintéticos. `zmax_verify_fase90` (ver Fase 90) terminó
+mientras esta app no estaba levantada, así que las miniaturas QC apareciendo en vivo (sin recargar,
+mientras una corrida pasa a `done`) y el timing exacto del polling (`/status` cada 3s, `/panel` solo
+al cambiar `n_done`) siguen sin verse en un navegador interactivo real -- para eso hace falta abrir
+el túnel con un sweep corriendo y mirar la pestaña Network mientras termina.
 
 ### Archivos de esta fase
 
