@@ -66,6 +66,44 @@ def _setup_style():
 
 
 # ------------------------------------------------------------------ 1. redshift
+def redshift_zmax_stats(
+    dump_df: pd.DataFrame | None,
+    head_df: pd.DataFrame,
+    *,
+    snid_col: str = "SNID",
+) -> dict:
+    """Fase 90: mismo calculo de columna ZCMB + filtro de centinela -9 que
+    ya usa `redshift_distribution()` para el texto quemado en el PNG
+    (z_max simulado/detectado) -- extraido aca para que el grafico y
+    `summary.json` usen EXACTAMENTE el mismo numero, sin duplicar la
+    deteccion de columna. Pura (sin matplotlib, sin I/O) a proposito: la
+    llama `run_simsed_poc.py::main` antes de escribir `summary.json`.
+
+    Devuelve {} si no hay `dump_df` utilizable (p.ej. SELECTION != NONE,
+    el unico caso real donde existe el .DUMP completo de eventos
+    generados) -- el llamador decide que hacer con un dict vacio."""
+    zcmb_col = next((c for c in (dump_df.columns if dump_df is not None else []) if "ZCMB" in c.upper()
+                      and "SMEAR" not in c.upper()), None)
+    if dump_df is None or dump_df.empty or not zcmb_col or "CID" not in dump_df.columns:
+        return {}
+
+    # SNANA usa -9 como centinela de "no definido" -- se descarta antes de
+    # medir (son ~0.1% de los eventos, no una senal real).
+    dump_df = dump_df[dump_df[zcmb_col] > -1]
+    if dump_df.empty:
+        return {}
+    detected_cids = set(head_df[snid_col].astype(str)) if snid_col in head_df.columns else set()
+    detected_mask = dump_df["CID"].astype(str).isin(detected_cids)
+    n_det = int(detected_mask.sum())
+
+    return {
+        "z_max_simulado": float(dump_df[zcmb_col].max()),
+        "n_simulado": int(len(dump_df)),
+        "z_max_detectado": float(dump_df.loc[detected_mask, zcmb_col].max()) if n_det else None,
+        "n_detectado": n_det,
+    }
+
+
 def redshift_distribution(
     head_df: pd.DataFrame,
     out_path: str | Path,
@@ -96,12 +134,16 @@ def redshift_distribution(
     zcmb_col = next((c for c in (dump_df.columns if dump_df is not None else []) if "ZCMB" in c.upper()
                       and "SMEAR" not in c.upper()), None)
     if dump_df is not None and not dump_df.empty and zcmb_col and "CID" in dump_df.columns:
+        # Fase 90: mismo numero que va a summary.json (redshift_zmax_stats),
+        # calculado sobre el dump_df original -- evita que el grafico y el
+        # JSON puedan divergir por duplicar el calculo en dos lados.
+        stats = redshift_zmax_stats(dump_df, head_df)
         # SNANA usa -9 como centinela de "no definido" -- se descarta antes
         # de graficar (son ~0.1% de los eventos, no una senal real).
         dump_df = dump_df[dump_df[zcmb_col] > -1]
         detected_cids = set(head_df["SNID"].astype(str)) if "SNID" in head_df.columns else set()
         detected_mask = dump_df["CID"].astype(str).isin(detected_cids)
-        n_sim, n_det = len(dump_df), int(detected_mask.sum())
+        n_sim, n_det = stats.get("n_simulado", 0), stats.get("n_detectado", 0)
 
         fig, ax = plt.subplots(figsize=(10, 6.5))
         ax.hist(dump_df[zcmb_col], bins=35, color="#c8ccd8", histtype="step",
@@ -122,15 +164,15 @@ def redshift_distribution(
                 f"• Simulados: {n_sim:,}\n"
                 f"• Detectados: {n_det:,}\n"
                 f"• Eficiencia: {n_det / n_sim * 100:.1f}%\n"
-                f"• z_max simulado: {dump_df[zcmb_col].max():.3f}\n"
-                f"• z_max detectado: {dump_df.loc[detected_mask, zcmb_col].max():.3f}"
+                f"• z_max simulado: {stats['z_max_simulado']:.3f}\n"
+                f"• z_max detectado: {stats['z_max_detectado']:.3f}"
             )
             ax.annotate(stats_text, xy=(0.02, 0.98), xycoords="axes fraction",
                         verticalalignment="top", fontsize=10, color=_INK,
                         bbox=dict(boxstyle="round,pad=0.3", facecolor=_PANEL, edgecolor=_LINE, alpha=0.9))
 
             print("  eficiencia por bin de redshift:")
-            z_bins = np.linspace(0, dump_df[zcmb_col].max(), 6)
+            z_bins = np.linspace(0, stats["z_max_simulado"], 6)
             for i in range(len(z_bins) - 1):
                 bin_mask = (dump_df[zcmb_col] >= z_bins[i]) & (dump_df[zcmb_col] < z_bins[i + 1])
                 bin_det = detected_mask & bin_mask

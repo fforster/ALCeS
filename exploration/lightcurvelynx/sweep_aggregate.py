@@ -74,6 +74,46 @@ def aggregate_sweep(sweep_name: str) -> Path:
     return out_path
 
 
+def sweep_zmax(sweep_name: str) -> dict:
+    """Fase 90: z maximo REAL alcanzado por el sweep completo -- el maximo
+    de `summary.json::z_max_simulado` entre las corridas ya 'done'. Lee
+    summary.json directo (no aggregated_summary.parquet, que puede estar
+    desactualizado si no se aprieto "Agregar" despues de la ultima corrida
+    en terminar) -- mismo patron de iteracion que aggregate_sweep().
+
+    Devuelve {} si el sweep no existe, no tiene corridas 'done' todavia, o
+    ninguna corrida 'done' trae el campo (summary.json de antes de esta
+    fase)."""
+    sweep_dir = SWEEP_RUNS_DIR / sweep_name
+    manifest_path = sweep_dir / "manifest.json"
+    if not manifest_path.exists():
+        return {}
+    manifest = sweep_hash.read_json(manifest_path)
+
+    best: dict = {}
+    for r in manifest["runs"]:
+        output_dir = sweep_dir / r["output_dir"]
+        run_hash_path = output_dir / "run_hash.json"
+        summary_path = output_dir / "summary.json"
+        if not run_hash_path.exists() or not summary_path.exists():
+            continue
+        try:
+            if sweep_hash.read_json(run_hash_path).get("status") != "done":
+                continue
+            summary = sweep_hash.read_json(summary_path)
+        except Exception:  # noqa: BLE001 -- archivo corrupto no debe tumbar el calculo del resto
+            continue
+        z = summary.get("z_max_simulado")
+        if z is None:
+            continue
+        if not best or z > best["z_max_simulado"]:
+            best = dict(
+                z_max_simulado=z, z_max_detectado=summary.get("z_max_detectado"),
+                class_key=r["class_key"], run_hash=r["run_hash"],
+            )
+    return best
+
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("uso: python3 sweep_aggregate.py <sweep_name>")

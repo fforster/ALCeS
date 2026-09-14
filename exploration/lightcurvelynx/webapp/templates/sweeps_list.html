@@ -6,7 +6,7 @@ salir de su página, sin tener que recordar el nombre. Cada uno vive en disco en
 <code>{{ sweep_runs_dir }}/&lt;nombre&gt;/</code>.</p>
 
 <table>
-  <thead><tr><th>Sweep</th><th>Compilado</th><th>Corridas</th><th>Estado</th><th>Fotometría</th></tr></thead>
+  <thead><tr><th>Sweep</th><th>Compilado</th><th>Corridas</th><th>Estado</th><th>Fotometría</th><th>z máx.</th></tr></thead>
   <tbody>
     {% for s in sweeps %}
     <tr>
@@ -19,9 +19,10 @@ salir de su página, sin tener que recordar el nombre. Cada uno vive en disco en
         {% else %}<span class="status-running">{{ s.n_done }}/{{ s.n_runs }} done</span>{% endif %}
       </td>
       <td>{{ "preservada (keep_phot)" if s.keep_phot else "—" }}</td>
+      <td>{{ "%.3f"|format(s.zmax.z_max_simulado) if s.zmax else "—" }}</td>
     </tr>
     {% else %}
-    <tr><td colspan="5" class="hint">Sin sweeps todavía — <a href="{{ url_for('index') }}">generar uno</a>.</td></tr>
+    <tr><td colspan="6" class="hint">Sin sweeps todavía — <a href="{{ url_for('index') }}">generar uno</a>.</td></tr>
     {% endfor %}
   </tbody>
 </table>

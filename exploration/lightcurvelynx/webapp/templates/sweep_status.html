@@ -34,6 +34,12 @@ reales en <code>{{ sweep_dir }}/runs/&lt;run_hash&gt;/</code> (en la máquina do
 <code>keep_phot=true</code>), <code>summary.json</code>, y las imágenes de <code>qc/</code> que se
 ven abajo. Click en "resumen" por fila para ver las métricas reales y la ruta completa.</p>
 
+<p class="hint"><strong>z máximo simulado en este sweep</strong> (entre las corridas ya terminadas):
+{% if zmax %}<code>{{ "%.3f"|format(zmax.z_max_simulado) }}</code>
+({{ zmax.class_key }}, corrida <code>{{ zmax.run_hash }}</code>){% if zmax.z_max_detectado %} --
+z máximo detectado: <code>{{ "%.3f"|format(zmax.z_max_detectado) }}</code>{% endif %}
+{% else %}— (todavía sin corridas terminadas con este dato){% endif %}</p>
+
 <table id="status-table">
   <thead><tr><th>Idx</th><th>run_hash</th><th>Clase</th><th>Estrategia</th><th>Semilla</th><th>Estado</th><th>Detalle</th><th>QC</th><th>Resultados</th></tr></thead>
   <tbody>

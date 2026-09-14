@@ -9646,3 +9646,66 @@ Un sweep real con manifiesto sigue reportando su estado sin cambios.
 
 Modificado: `sweep_monitor.py` (`monitor_sweep`, `__main__`), `webapp/app.py`
 (`sweep_status_json`). `NOTES.md`: esta entrada.
+
+## Fase 90 -- z máximo simulado, expuesto por corrida y por sweep (pedido real del usuario)
+
+### Motivación
+
+El usuario pidió poder leer "el z máximo que se llega a simular en cada sweep". Esa información ya
+se calculaba (`pipeline/postproc/qc.py::redshift_distribution`, texto "z_max simulado"/"z_max
+detectado" quemado dentro de `qc_redshift.png`) pero nunca quedaba en ningún dato estructurado --
+`summary.json`, `manifest.json` y `aggregated_summary.parquet` no tenían ningún campo de redshift.
+
+### Cambio real
+
+`pipeline/postproc/qc.py`: nueva función pura `redshift_zmax_stats(dump_df, head_df)` -- extrae la
+misma detección de columna `ZCMB`/filtro de centinela `-9`/máscara de detectados que ya usaba
+`redshift_distribution` para el texto del PNG, sin duplicar el cálculo (`redshift_distribution` ahora
+la llama internamente; su firma y su retorno -- `Path` -- no cambian, porque la reusan
+`run_snia_ddf_poc.py`, `run_simsed_91bg_ddf_poc.py`, `run_non1ased_poc.py` y
+`pipeline/postprocess.py`, este último con un `{k: str(v) ...}` sobre todo lo que devuelve
+`run_all_qc` que hubiera roto con una clave nueva tipo dict).
+
+`run_simsed_poc.py::main`: `summary.json` ahora incluye `z_min_nominal`/`z_max_nominal` (el
+`GENRANGE_REDSHIFT` real de la clase, límite duro del sampler -- `CLASS_CONFIGS[class_key]
+["genrange_redshift"]`) y `z_max_simulado`/`z_max_detectado` (el z real alcanzado, vía
+`qc.redshift_zmax_stats(dump_df, head_df_detected)`). `sweep_aggregate.py` no necesitó ningún cambio
+para que estos campos lleguen a `aggregated_summary.parquet`: ya volcaba automáticamente cualquier
+clave nueva de `summary.json` prefijada `summary_*`.
+
+`sweep_aggregate.py`: nueva función `sweep_zmax(sweep_name)` -- el máximo de `z_max_simulado` entre
+las corridas ya `done` del sweep (lee `summary.json` directo, no `aggregated_summary.parquet`, que
+puede estar desactualizado si no se apretó "Agregar" después de la última corrida en terminar).
+
+`webapp/app.py`: `sweep_status()` y `sweeps_list()` calculan `sweep_aggregate.sweep_zmax(...)` y lo
+pasan a los templates. `sweep_status.html` muestra el z máximo del sweep completo (clase y
+`run_hash` de la corrida que lo alcanzó); `sweeps_list.html` agrega una columna `z_max`.
+`run_summary.html` no necesitó cambios -- itera `summary.items()` genéricamente, los 4 campos nuevos
+aparecen solos en la tabla por-corrida.
+
+### Validación real
+
+Sin acceso local a la pila de LightCurveLynx (no instalable en esta máquina Windows), se verificó
+cada pieza nueva con datos sintéticos reales en vez de solo revisión de código:
+- `redshift_zmax_stats`: con un `dump_df` de 5 eventos (uno con el centinela `-9`) y 2 detectados,
+  confirma `n_simulado=4` (descarta el centinela), `z_max_simulado`/`z_max_detectado` exactos, y
+  `{}` con `dump_df=None` o vacío.
+- `redshift_distribution` refactorizada: corrida real end-to-end con 200 eventos sintéticos -> genera
+  un PNG real (74 KB) con las mismas estadísticas por consola que antes del refactor.
+- `sweep_zmax`: con un sweep sintético de 4 corridas (2 `done` con el campo, 1 `running` con un
+  z_max mayor que NO debe ganar, 1 `done` con `summary.json` "viejo" sin el campo) confirma que elige
+  el máximo correcto solo entre las `done` que sí traen el dato, y devuelve `{}` para un sweep
+  inexistente.
+- `sweeps_list.html`/`sweep_status.html`: renderizado real vía Jinja2 (con y sin `zmax`) confirma que
+  el HTML final trae el número formateado y el fallback `—` cuando corresponde.
+
+Pendiente: correr un sweep real en NLHPC (donde sí está la pila completa) para confirmar
+`summary.json`/`aggregated_summary.parquet` en un caso real end-to-end -- ver despliegue de esta
+fase.
+
+### Archivos de esta fase
+
+Modificado: `pipeline/postproc/qc.py` (`redshift_zmax_stats` nueva, `redshift_distribution`
+refactorizada), `run_simsed_poc.py` (`main`, nuevos campos en `summary.json`), `sweep_aggregate.py`
+(`sweep_zmax` nueva), `webapp/app.py` (`sweep_status`, `sweeps_list`),
+`webapp/templates/sweep_status.html`, `webapp/templates/sweeps_list.html`. `NOTES.md`: esta entrada.

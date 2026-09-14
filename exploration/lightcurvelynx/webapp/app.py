@@ -100,6 +100,10 @@ def sweeps_list():
                 name=d.name, compiled_at=manifest.get("compiled_at", ""),
                 n_runs=manifest.get("n_runs", len(rows)), n_done=n_done, n_failed=n_failed,
                 keep_phot=manifest.get("keep_phot", False),
+                # Fase 90: z maximo REAL simulado entre las corridas 'done' de
+                # este sweep -- {} si ninguna corrida done trae el campo
+                # todavia (summary.json de antes de esta fase).
+                zmax=sweep_aggregate.sweep_zmax(d.name),
             ))
     sweeps.sort(key=lambda s: s["compiled_at"], reverse=True)
     return render_template("sweeps_list.html", sweeps=sweeps, sweep_runs_dir=str(SWEEP_RUNS_DIR))
@@ -211,6 +215,9 @@ def sweep_status(name):
         # Fase 87: donde quedan los archivos reales en disco -- pedido
         # explicito del usuario ("no entiendo como poder revisar eso").
         sweep_dir=str(SWEEP_RUNS_DIR / name),
+        # Fase 90: z maximo REAL simulado entre las corridas 'done' de este
+        # sweep -- {} si ninguna corrida done trae el campo todavia.
+        zmax=sweep_aggregate.sweep_zmax(name),
     )
 
 

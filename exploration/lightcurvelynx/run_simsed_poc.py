@@ -1003,6 +1003,17 @@ def main(class_key: str, ngentot_override: int | None = None, seed_index: int = 
     print(f"[{time.time()-t_start:.1f}s] tablas persistidas: head_df.parquet "
           f"({len(head_df)} filas), phot_df.parquet ({len(phot_df)} filas)")
 
+    # Fase 90: import movido antes del write de summary.json (antes vivia
+    # despues, solo para qc.run_all_qc) -- se necesita aca para
+    # redshift_zmax_stats(), que calcula el z real alcanzado (dump_df/
+    # head_df_detected ya existen en este scope) con la MISMA logica que
+    # usa qc.py::redshift_distribution para el texto quemado en el PNG, sin
+    # duplicar el calculo.
+    sys.path.insert(0, str(REPO_ROOT))
+    from pipeline.postproc import qc
+    z_min_nominal, z_max_nominal = cfg["genrange_redshift"]
+    zmax_stats = qc.redshift_zmax_stats(dump_df, head_df_detected)
+
     (out_dir / "summary.json").write_text(json.dumps({
         "class_key": class_key,
         "strategy": "WFD" if wfd else "DDF",
@@ -1015,10 +1026,16 @@ def main(class_key: str, ngentot_override: int | None = None, seed_index: int = 
         "detection_efficiency_pct": 100.0 * len(detected_snids) / ngentot,
         "snr_median": float(snr_sim.median()),
         "snr_p90": float(snr_sim.quantile(0.9)),
+        # Fase 90: z_min/max_nominal = GENRANGE_REDSHIFT de la clase (limite
+        # duro del sampler, run_simsed_poc.py::CLASS_CONFIGS); z_max_simulado/
+        # detectado = lo que realmente salio del sampler en esta corrida
+        # (dump_df completo vs subconjunto detectado), via qc.redshift_zmax_stats.
+        "z_min_nominal": z_min_nominal,
+        "z_max_nominal": z_max_nominal,
+        "z_max_simulado": zmax_stats.get("z_max_simulado"),
+        "z_max_detectado": zmax_stats.get("z_max_detectado"),
     }, indent=2))
 
-    sys.path.insert(0, str(REPO_ROOT))
-    from pipeline.postproc import qc
     qc_dir = out_dir / "qc"
     if len(head_df_detected) > 0:
         paths = qc.run_all_qc(
