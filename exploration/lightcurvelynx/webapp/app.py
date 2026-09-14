@@ -275,6 +275,16 @@ def sweep_status_json(name):
     return jsonify(rows)
 
 
+@app.route("/sweep/<name>/panel")
+def sweep_panel_json(name):
+    """Fase 91: panel agregado en vivo (sweep_aggregate.build_live_panel) --
+    el JS de sweep_status.html lo pide solo cuando cambia el numero de
+    corridas 'done', no en cada tick de 3s (ver pollOnce())."""
+    if not (SWEEP_RUNS_DIR / name / "manifest.json").exists():
+        return jsonify(error=f"'{name}' no tiene manifiesto compilado todavia"), 404
+    return jsonify(sweep_aggregate.build_live_panel(name))
+
+
 @app.route("/sweep/<name>/run/<run_hash>/summary")
 def run_summary(name, run_hash):
     """Fase 87: 'donde quedaron los resultados' en una pagina real, sin

@@ -54,7 +54,9 @@ z máximo detectado: <code>{{ "%.3f"|format(zmax.z_max_detectado) }}</code>{% en
       <td class="detail-cell">{{ r.detail }}</td>
       <td class="qc-cell qc-links">
         {% for f in r.qc_files %}
-          <a href="{{ url_for('qc_image', sweep=name, run_hash=r.run_hash, filename=f) }}" target="_blank">{{ f.split('qc_')[-1].replace('.png','') }}</a>
+          <a href="{{ url_for('qc_image', sweep=name, run_hash=r.run_hash, filename=f) }}" target="_blank" title="{{ f.split('qc_')[-1].replace('.png','') }}">
+            <img src="{{ url_for('qc_image', sweep=name, run_hash=r.run_hash, filename=f) }}" alt="{{ f.split('qc_')[-1].replace('.png','') }}" loading="lazy" style="max-width:140px;max-height:100px;display:block;margin-bottom:2px">
+          </a>
         {% endfor %}
       </td>
       <td class="summary-cell">
@@ -65,6 +67,8 @@ z máximo detectado: <code>{{ "%.3f"|format(zmax.z_max_detectado) }}</code>{% en
   </tbody>
 </table>
 <p id="poll-hint" class="hint"></p>
+
+<div id="live-panel"></div>
 
 <h3>YAML generado</h3>
 <pre>{{ yaml_text }}</pre>
@@ -89,11 +93,64 @@ function statusClass(status) {
 }
 
 function qcLinksHtml(row) {
+  // Fase 91: miniaturas embebidas en vez de solo enlaces -- aparecen solas
+  // apenas la fila individual pasa a "done", sin recargar la pagina.
   return row.qc_files.map(f => {
     const label = f.split("qc_").pop().replace(".png", "");
     const url = `/qc/${SWEEP_NAME}/${row.run_hash}/${f}`;
-    return `<a href="${url}" target="_blank">${label}</a>`;
-  }).join(" ");
+    return `<a href="${url}" target="_blank" title="${label}">` +
+           `<img src="${url}" alt="${label}" loading="lazy" ` +
+           `style="max-width:140px;max-height:100px;display:block;margin-bottom:2px"></a>`;
+  }).join("");
+}
+
+// Fase 91: numero de filas "done" en el ultimo poll -- solo se pide el
+// panel agregado (/sweep/<name>/panel) cuando este numero CAMBIA, no en
+// cada tick de 3s, para no recalcular nada pesado en el login node mas
+// seguido de lo necesario.
+let lastNDone = -1;
+
+function effTableHtml(rows) {
+  if (!rows.length) return "<p class=\"hint\">Sin corridas terminadas todavia.</p>";
+  const head = "<tr><th>Clase</th><th>Estrategia</th><th>Eficiencia</th><th>SNR mediano</th></tr>";
+  const body = rows.map(r => {
+    const pct = (r.detection_efficiency_pct || 0).toFixed(1);
+    return `<tr><td>${r.class_key}</td><td>${r.strategy}</td>` +
+           `<td><div style="background:#2a3040;border-radius:3px;overflow:hidden;width:120px">` +
+           `<div style="background:#5b8def;width:${Math.min(pct,100)}%;color:#fff;font-size:11px;padding:1px 4px">${pct}%</div>` +
+           `</div></td><td>${(r.snr_median || 0).toFixed(1)}</td></tr>`;
+  }).join("");
+  return `<table><thead>${head}</thead><tbody>${body}</tbody></table>`;
+}
+
+function histTableHtml(hist, label) {
+  if (!hist || !hist.counts || !hist.counts.length) return "";
+  const rows = hist.counts.map((c, i) =>
+    `<tr><td>[${hist.bin_edges[i].toFixed(2)}, ${hist.bin_edges[i+1].toFixed(2)})</td><td>${c}</td></tr>`
+  ).join("");
+  return `<h4>${label}</h4><table><thead><tr><th>bin</th><th>n</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function pivotTableHtml(rows) {
+  if (!rows.length) return "";
+  const head = "<tr><th>Clase</th><th>Estrategia</th><th>Eficiencia %</th><th>SNR mediano</th><th>SNR p90</th></tr>";
+  const body = rows.map(r =>
+    `<tr><td>${r.class_key}</td><td>${r.strategy}</td><td>${(r.detection_efficiency_pct || 0).toFixed(1)}</td>` +
+    `<td>${(r.snr_median || 0).toFixed(1)}</td><td>${(r.snr_p90 || 0).toFixed(1)}</td></tr>`
+  ).join("");
+  return `<h4>WFD vs DDF</h4><table><thead>${head}</thead><tbody>${body}</tbody></table>`;
+}
+
+async function refreshLivePanel() {
+  const panel = document.getElementById("live-panel");
+  const res = await fetch(`/sweep/${SWEEP_NAME}/panel`);
+  if (!res.ok) return;
+  const data = await res.json();
+  panel.innerHTML = "<h3>Vista agregada del sweep (corridas terminadas)</h3>" +
+    effTableHtml(data.efficiency_rows || []) +
+    histTableHtml(data.z_hist, "Redshift (REDSHIFT_HELIO)") +
+    histTableHtml(data.nobs_hist, "NOBS") +
+    pivotTableHtml(data.pivot_ddf_wfd || []);
 }
 
 async function pollOnce() {
@@ -102,7 +159,9 @@ async function pollOnce() {
   const rows = await res.json();
   let allTerminal = rows.length > 0;
   let allDone = rows.length > 0;
+  let nDone = 0;
   for (const row of rows) {
+    if (row.status === "done") nDone++;
     const tr = document.querySelector(`tr[data-index="${row.index}"]`);
     if (!tr) continue;
     const statusCell = tr.querySelector(".status-cell");
@@ -119,6 +178,12 @@ async function pollOnce() {
   }
   if (allDone) {
     document.getElementById("agg-pub-actions").style.display = "";
+  }
+  // Fase 91: el panel agregado solo se recalcula cuando cambia el conteo
+  // de corridas "done" -- no en cada tick de 3s.
+  if (nDone > 0 && nDone !== lastNDone) {
+    lastNDone = nDone;
+    await refreshLivePanel();
   }
   return allTerminal;
 }

@@ -9709,3 +9709,62 @@ Modificado: `pipeline/postproc/qc.py` (`redshift_zmax_stats` nueva, `redshift_di
 refactorizada), `run_simsed_poc.py` (`main`, nuevos campos en `summary.json`), `sweep_aggregate.py`
 (`sweep_zmax` nueva), `webapp/app.py` (`sweep_status`, `sweeps_list`),
 `webapp/templates/sweep_status.html`, `webapp/templates/sweeps_list.html`. `NOTES.md`: esta entrada.
+
+## Fase 91 -- visualizador en vivo a nivel de sweep (pedido real del usuario)
+
+### Motivación
+
+El usuario pidió "un visualizador en tiempo real de cómo se ve la corrida completa". No existe hoy
+ningún progreso intra-corrida persistido a disco (`run_hash.json` solo tiene `status="running"`
+binario al principio y `"done"`/`"failed"` al final, sin etapas intermedias) -- instrumentar
+`run_simsed_poc.py` para exponer eso es un cambio de alto riesgo sobre código científico central,
+descartado explícitamente para esta ronda. El alcance real acordado: vista en vivo a nivel de
+*sweep completo*, sobre el polling que ya existía (Fase 84, cada 3s) -- mostrar los resultados de
+cada corrida apenas están listos, sin recargar la página, y sin regenerar nada pesado (ni
+matplotlib) en el login node en cada tick.
+
+### Cambio real
+
+**Miniaturas QC embebidas** (sin endpoint nuevo): `sweep_status.html`, tanto el render server-side
+inicial como `qcLinksHtml()` (el JS de polling, Fase 84) ahora envuelven cada QC en un `<img
+loading="lazy">` en vez de solo un `<a>` de texto -- las 4 imágenes de cada corrida aparecen solas,
+inline, apenas esa fila individual pasa a `done`. `qc_files` ya viajaba en el JSON de `/status`
+(Fase 83); el cambio es 100% de template/JS, sin tocar `sweep_status_json`.
+
+**Panel agregado del sweep**: `sweep_aggregate.py::build_live_panel(sweep_name)` -- nueva función,
+mismo patrón de iteración que `aggregate_sweep`/`sweep_zmax` (manifest -> `summary.json`/
+`run_hash.json` por corrida), SOLO corridas `done`, sin matplotlib: `efficiency_rows` (eficiencia +
+SNR mediano por corrida, desde `summary.json`), `z_hist`/`nobs_hist` (histogramas reales vía
+`np.histogram`, leyendo solo las columnas `REDSHIFT_HELIO`/`NOBS` de `head_df.parquet` -- reusa el
+patrón de las celdas 9/17 de `analyze_phot_df.ipynb`), `pivot_ddf_wfd` (promedio de eficiencia/SNR
+por clase × estrategia). Ruta nueva `webapp/app.py::sweep_panel_json` (`/sweep/<name>/panel`),
+mismo guard 404 que `/status`.
+
+**JS**: `sweep_status.html` ahora cuenta cuántas filas están en `done` en cada poll; SOLO cuando ese
+número cambia respecto al poll anterior, pide `/panel` y renderiza tres tablas (eficiencia con
+barras CSS, histogramas bin/conteo, pivot WFD/DDF) en un `<div id="live-panel">` nuevo debajo de la
+tabla de estado -- nunca en cada tick de 3s, para no recalcular nada de más en el login node. El
+mecanismo de parada (`TERMINAL`/`allDone`, Fase 84/88) no se tocó.
+
+### Validación real
+
+Sin acceso local a la pila completa (mismo motivo que Fase 90), verificado con datos sintéticos
+reales: `build_live_panel` con un sweep de 4 corridas (2 `done` de la misma clase/estrategia con
+`head_df.parquet` real, 1 `running` con valores "extremos" que NO debe entrar en ningún cálculo, 1
+`done` con `summary.json` viejo sin eficiencia/SNR) confirma que excluye la corrida `running` de
+`efficiency_rows`/`pivot_ddf_wfd`/histogramas, promedia correctamente por clase+estrategia
+(50%+70% -> 60% exacto), y agrega los histogramas de z/NOBS solo con los valores de las corridas
+`done` (6 valores esperados, 6 obtenidos). El bloque `<script>` completo de `sweep_status.html` se
+verificó sintácticamente válido como JS real (Node, no solo lectura visual). El template completo
+se renderizó vía Jinja2 real con una fila `done` con QC -- confirma que aparecen los `<img>` y el
+`<div id="live-panel">`.
+
+Pendiente: verificación en navegador real (vía túnel SSH a NLHPC) con un sweep corriendo de verdad,
+para confirmar el comportamiento visual y el timing de red (`/status` cada 3s, `/panel` solo al
+cambiar `n_done`) -- ver despliegue de esta fase.
+
+### Archivos de esta fase
+
+Modificado: `sweep_aggregate.py` (`build_live_panel` nueva, `import numpy as np`), `webapp/app.py`
+(`sweep_panel_json` nueva), `webapp/templates/sweep_status.html` (miniaturas QC embebidas, panel en
+vivo, JS de conteo de `done`). `NOTES.md`: esta entrada.

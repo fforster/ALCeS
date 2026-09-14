@@ -17,6 +17,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 import sweep_hash
@@ -112,6 +113,91 @@ def sweep_zmax(sweep_name: str) -> dict:
                 class_key=r["class_key"], run_hash=r["run_hash"],
             )
     return best
+
+
+def build_live_panel(sweep_name: str) -> dict:
+    """Fase 91: panel agregado en vivo, SOLO de corridas 'done' -- sin
+    matplotlib (liviano, pensado para recalcularse cada vez que cambia el
+    conteo de 'done', no cada 3s de polling, ver webapp/app.py::sweep_panel_json
+    y el JS de sweep_status.html). Reusa los 3 patrones ya probados en
+    analyze_phot_df.ipynb (eficiencia por clase/estrategia, histogramas de
+    REDSHIFT_HELIO/NOBS, pivot WFD vs DDF) pero como tablas, no graficos.
+
+    Devuelve {} si el sweep no existe. Sin corridas 'done' todavia, devuelve
+    listas/histogramas vacios (no {} -- a diferencia de sweep_zmax, aca el
+    llamador siempre espera las 4 claves)."""
+    sweep_dir = SWEEP_RUNS_DIR / sweep_name
+    manifest_path = sweep_dir / "manifest.json"
+    if not manifest_path.exists():
+        return {}
+    manifest = sweep_hash.read_json(manifest_path)
+
+    efficiency_rows = []
+    z_values: list[float] = []
+    nobs_values: list[float] = []
+    pivot_acc: dict[tuple[str, str], dict] = {}
+
+    for r in manifest["runs"]:
+        output_dir = sweep_dir / r["output_dir"]
+        run_hash_path = output_dir / "run_hash.json"
+        summary_path = output_dir / "summary.json"
+        if not run_hash_path.exists() or not summary_path.exists():
+            continue
+        try:
+            if sweep_hash.read_json(run_hash_path).get("status") != "done":
+                continue
+            summary = sweep_hash.read_json(summary_path)
+        except Exception:  # noqa: BLE001 -- archivo corrupto no debe tumbar el resto del panel
+            continue
+
+        strategy = summary.get("strategy", "WFD" if r.get("wfd") else "DDF")
+        class_key = summary.get("class_key", r["class_key"])
+        eff = summary.get("detection_efficiency_pct")
+        snr_median = summary.get("snr_median")
+        snr_p90 = summary.get("snr_p90")
+        efficiency_rows.append(dict(class_key=class_key, strategy=strategy,
+                                     detection_efficiency_pct=eff, snr_median=snr_median))
+
+        acc = pivot_acc.setdefault((class_key, strategy), dict(eff=[], snr_median=[], snr_p90=[]))
+        if eff is not None:
+            acc["eff"].append(eff)
+        if snr_median is not None:
+            acc["snr_median"].append(snr_median)
+        if snr_p90 is not None:
+            acc["snr_p90"].append(snr_p90)
+
+        head_path = output_dir / "head_df.parquet"
+        if head_path.exists():
+            try:
+                cols = pd.read_parquet(head_path, columns=["REDSHIFT_HELIO", "NOBS"])
+                z_values.extend(cols["REDSHIFT_HELIO"].dropna().tolist())
+                nobs_values.extend(cols["NOBS"].dropna().tolist())
+            except Exception:  # noqa: BLE001 -- parquet corrupto/columna ausente no tumba el resto
+                pass
+
+    efficiency_rows.sort(key=lambda row: (row["class_key"], row["strategy"]))
+
+    def _hist(values: list[float], bins: int = 10) -> dict:
+        if not values:
+            return {}
+        counts, edges = np.histogram(values, bins=bins)
+        return dict(bin_edges=edges.tolist(), counts=counts.tolist())
+
+    def _mean(vals: list[float]) -> float | None:
+        return sum(vals) / len(vals) if vals else None
+
+    pivot_rows = [
+        dict(class_key=ck, strategy=st, detection_efficiency_pct=_mean(acc["eff"]),
+             snr_median=_mean(acc["snr_median"]), snr_p90=_mean(acc["snr_p90"]))
+        for (ck, st), acc in sorted(pivot_acc.items())
+    ]
+
+    return dict(
+        efficiency_rows=efficiency_rows,
+        z_hist=_hist(z_values),
+        nobs_hist=_hist(nobs_values),
+        pivot_ddf_wfd=pivot_rows,
+    )
 
 
 if __name__ == "__main__":
