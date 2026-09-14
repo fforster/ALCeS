@@ -9610,3 +9610,39 @@ Modificado: `sweep_launch.py` (`record_event`), `webapp/app.py` (`slurm_availabl
 real en `sweep_run()`, `launched` en `sweep_status()`), `webapp/templates/sweep_status.html`
 (mensaje según camino real, fix de `TERMINAL`), `webapp/templates/history.html` (detalle de
 `launch_sweep`). `NOTES.md`: esta entrada.
+
+## Fase 89 -- `/sweep/<name>/status` devuelve 404 limpio en vez de 500 (bug real visto en vivo)
+
+### Motivación
+
+Probando la app (vía túnel SSH al login node de NLHPC), una pestaña quedó con el polling de Fase 84
+corriendo sobre un sweep (`_fase83_test`) cuyo `sweep_runs/<nombre>/manifest.json` ya no existía --
+cada tick de 3s generaba un `500` real en el log del proceso Flask
+(`GET /sweep/_fase83_test/status HTTP/1.1" 500`, con el traceback completo de
+`sweep_monitor.monitor_sweep` reventando en `sweep_hash.read_json` con `FileNotFoundError` sin
+capturar). No rompía nada más, pero ensuciaba el log cada 3s mientras esa pestaña siguiera abierta.
+
+### Cambio real
+
+`sweep_monitor.py::monitor_sweep`: ahora valida `manifest_path.exists()` antes de leerlo y lanza
+`FileNotFoundError` con mensaje explícito ("correr sweep_compile.py primero") en vez de dejar
+propagar la excepción cruda de `sweep_hash.read_json`. El `__main__` del módulo captura ese error
+puntual y sale con código 1 limpio (antes: traceback completo en la terminal para un uso CLI normal).
+
+`webapp/app.py::sweep_status_json` (la ruta `/sweep/<name>/status`): mismo guard que ya tenía la
+vista HTML hermana (`sweep_status()`, que hace `flash()` + redirect) -- si no existe
+`manifest.json`, responde `404 + jsonify(error=...)` antes de llamar a `monitor_sweep`. El polling en
+`sweep_status.html` (`pollOnce()`, Fase 84) ya tenía `if (!res.ok) return true;` -- corta el loop solo,
+sin cambios en el frontend.
+
+### Validación real
+
+Confirmado en el propio incidente: tras el fix, la misma pestaña abierta contra `/sweep/_fase83_test`
+deja de generar tracebacks -- el primer poll recibe 404 y el loop se detiene. `python3
+sweep_monitor.py <sweep_inexistente>` imprime el mensaje y sale con código 1 en vez de un traceback.
+Un sweep real con manifiesto sigue reportando su estado sin cambios.
+
+### Archivos de esta fase
+
+Modificado: `sweep_monitor.py` (`monitor_sweep`, `__main__`), `webapp/app.py`
+(`sweep_status_json`). `NOTES.md`: esta entrada.

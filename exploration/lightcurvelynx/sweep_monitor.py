@@ -79,6 +79,11 @@ def run_status(sweep_dir: Path, row: dict, sacct: dict[str, str]) -> dict:
 def monitor_sweep(sweep_name: str) -> list[dict]:
     sweep_dir = SWEEP_RUNS_DIR / sweep_name
     manifest_path = sweep_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError(
+            f"sweep '{sweep_name}' no tiene manifest.json compilado "
+            f"(esperado en {manifest_path}) -- correr sweep_compile.py primero"
+        )
     manifest = sweep_hash.read_json(manifest_path)
 
     job_ids = [r.get("slurm_job_id") for r in manifest["runs"]]
@@ -116,5 +121,9 @@ if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("uso: python3 sweep_monitor.py <sweep_name>")
         sys.exit(1)
-    rows = monitor_sweep(sys.argv[1])
+    try:
+        rows = monitor_sweep(sys.argv[1])
+    except FileNotFoundError as e:
+        print(e)
+        sys.exit(1)
     print(format_status(rows))

@@ -253,6 +253,12 @@ def sweep_run(name):
 
 @app.route("/sweep/<name>/status")
 def sweep_status_json(name):
+    # Mismo guard que la vista HTML (sweep_status): un sweep sin
+    # manifest.json compilado no tiene estado que reportar. Devolver 404
+    # (JSON) en vez de dejar reventar monitor_sweep con un 500 -- el
+    # polling del front (sweep_status.html) ya corta solo en `!res.ok`.
+    if not (SWEEP_RUNS_DIR / name / "manifest.json").exists():
+        return jsonify(error=f"'{name}' no tiene manifiesto compilado todavia"), 404
     rows = sweep_monitor.monitor_sweep(name)
     for r in rows:
         run_dir = SWEEP_RUNS_DIR / name / "runs" / r["run_hash"]
