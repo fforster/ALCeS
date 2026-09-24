@@ -93,6 +93,9 @@ unzip lightcurvelynx_local_data_pilot.zip -d .
 unzip run_SNANA_pilot.zip -d ~
 ```
 
+(Si tienes `ALCES_DATA` definida, extrae `run_SNANA_pilot.zip` ahí y no en `~`: los scripts
+buscan `run_SNANA/` en `$ALCES_DATA` y, si no está definida, en tu home. Ver `INSTALL.md` §2.5.)
+
 Verificar que quedaron 3 carpetas `*_local/` no vacías: `salt2_h17_local/`, `simsed_91bg_local/`,
 `simsed_pisnstellahecore_local/`, y `~/run_SNANA/{LSST_SEARCHEFF_PIPELINE.DAT,
 LSST_PIPELINE_LOGIC.DAT}`.

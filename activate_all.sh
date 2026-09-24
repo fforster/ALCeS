@@ -50,8 +50,16 @@ module load SNANA/11.05p
 echo "✓ modulo SNANA/11.05p cargado"
 
 # --- 3. variables de entorno ---
-export SNDATA_ROOT=/home/mvalenzuela/SNDATA_ROOT
+# SNDATA_ROOT: de cada usuario (arbol publico de SNANA + salida SIM/).
+export SNDATA_ROOT="${SNDATA_ROOT:-$HOME/SNDATA_ROOT}"
 echo "✓ SNDATA_ROOT=$SNDATA_ROOT"
+[ -d "$SNDATA_ROOT" ] || echo "  ⚠ no existe — ver INSTALL.md seccion 4"
+
+# ALCES_DATA (Fase 94): copia compartida de solo lectura con run_SNANA/ y
+# OTMODEL_NON1ASED/. Definirla en ~/.bashrc; sin ella cae a $HOME.
+export ALCES_DATA="${ALCES_DATA:-${SNANA_HOME:-$HOME}}"
+echo "✓ ALCES_DATA=$ALCES_DATA"
+[ -d "$ALCES_DATA/run_SNANA" ] || echo "  ⚠ no contiene run_SNANA/ — exportar ALCES_DATA (ver INSTALL.md)"
 
 # --- 4. verificacion rapida ---
 echo ""

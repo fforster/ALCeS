@@ -36,7 +36,13 @@ from pathlib import Path
 # home real del usuario -- en NLHPC eso ya es `/home/mvalenzuela`, cero
 # cambio de comportamiento. Override real vía variable de entorno para
 # cualquier otra estructura de carpetas.
-SNANA_HOME = Path(os.environ.get("SNANA_HOME", str(Path.home())))
+#
+# Fase 94: el nombre canónico es ALCES_DATA (la carpeta compartida del
+# equipo en NLHPC, la misma que usa pipeline/paths.py::alces_data());
+# SNANA_HOME se sigue aceptando como alias.
+SNANA_HOME = Path(os.environ.get("ALCES_DATA")
+                  or os.environ.get("SNANA_HOME")
+                  or str(Path.home()))
 
 # Raíz real del repo (antes hardcodeada a "/home/mvalenzuela/AUTOSIM" en 15+
 # archivos) -- se calcula desde la ubicación real de este archivo

@@ -74,41 +74,71 @@ cd AUTOSIM
 > catálogos) — no tiene código y no se clona para instalar el pipeline.
 
 
-## 2.5 Portabilidad entre cuentas NLHPC — leer antes de instalar para otro usuario
+## 2.5 Datos compartidos del equipo (`ALCES_DATA`) — Fase 94
 
-Si estás instalando esto en una cuenta NLHPC **distinta** de `mvalenzuela`
-(p.ej. la de tu supervisor/colaborador), dos cosas del repo son
-account-specific y no funcionan tal cual:
+El repo no tiene rutas a ninguna cuenta: todo lo que no está en git se
+resuelve con dos variables de entorno.
 
-1. **`pipeline/models.yaml`** — cada una de las 42 clases apunta a un
-   `simgen_include:` con ruta absoluta bajo `/home/mvalenzuela/...`
-   (`run_SNANA/model_config/`, `run_SNANA/elastic/model_config/`,
-   `OTMODEL_NON1ASED/SNtypes/`). Son archivos `SIMGEN_INCLUDE_*.INPUT`
-   curados manualmente contra el manual de SNANA — no los genera este
-   pipeline. En una cuenta nueva **no existen** salvo que:
-   - la cuenta nueva tenga permiso de lectura sobre el `$HOME` de
-     `mvalenzuela` (poco común por defecto en NLHPC — hay que pedirlo), o
-   - copies ese árbol de archivos a la cuenta nueva y edites `models.yaml`
-     para apuntar a la nueva ruta base, o
-   - ambas cuentas compartan un directorio de proyecto/grupo en NLHPC y
-     ahí vivan los `SIMGEN_INCLUDE_*`.
+| Variable | Qué es | De quién |
+|---|---|---|
+| `ALCES_DATA` | Carpeta **compartida, de solo lectura** con `run_SNANA/` (plantillas, SEARCHEFF, `SIMGEN_INCLUDE_*`), `OTMODEL_NON1ASED/`, `bin/snana_custom/snlc_sim.exe` y el tarball público `SNDATA_ROOT_*.tar.gz` (~21 GB en total) | Una sola copia para todo el equipo |
+| `SNDATA_ROOT` | Árbol público de SNANA (`MWDUST`, filtros, `models/`…) **y** la salida `SIM/` de tus simulaciones | Cada usuario, en su `$HOME` |
 
-   El `preflight` (sección 8.4) revisa la existencia de cada uno de estos
-   archivos antes de lanzar — si faltan, lo dice explícitamente por clase
-   (`modelo <X>: no encontrado: <ruta>`), no falla en silencio.
+`pipeline/models.yaml` y `campaigns/*.yaml` usan `${ALCES_DATA}/...`,
+`${ALCES_REPO}/...` (la raíz del repo, sin importar dónde lo clonaste) y
+`$SNDATA_ROOT/...`. El compilador de campañas las expande al generar los
+`.INPUT`, y si un `SIMGEN_INCLUDE` usa `${ALCES_DATA}` por dentro, escribe una
+copia ya expandida en `build/<campaña>/includes/curated_<clase>.INPUT`.
+SNANA solo ve rutas absolutas y el job SLURM no depende de tu entorno. Si
+alguna variable falta, la compilación se detiene y dice cuál.
 
-2. **`campaigns/*.yaml` → `defaults:`** — `kcor_file`,
-   `searcheff_pipeline_file`, `searcheff_pipeline_logic_file` también son
-   rutas absolutas bajo `/home/mvalenzuela/run_SNANA/`. Mismo problema,
-   misma solución (compartir o copiar + editar el YAML).
+Si `ALCES_DATA` no está definida, se usa tu `$HOME` (era el esquema original,
+con los datos en `/home/mvalenzuela`). `SNANA_HOME`, el nombre de la Fase 74,
+se sigue aceptando como alias.
 
-3. **`export SNDATA_ROOT=...`** (sección 4) sí es correcto per-cuenta — cada
-   usuario necesita el suyo propio, apuntando a su propio `$HOME`.
+### Para cada miembro del equipo (una vez)
 
-Regla práctica: antes de la primera campaña real en una cuenta nueva, correr
-el `--dry-run` de la sección 8.4 y confirmar `pre-flight OK` — si alguna
-ruta de `models.yaml`/`campaign.yaml` no existe en la cuenta nueva, aparece
-ahí, clase por clase, antes de gastar cupo de cómputo.
+```bash
+# 1. Apuntar a la copia compartida (agregar al ~/.bashrc)
+echo 'export ALCES_DATA=/ruta/compartida/alces_data' >> ~/.bashrc
+source ~/.bashrc
+
+# 2. Tu SNDATA_ROOT propio, desde el tarball público de la copia compartida
+mkdir -p ~/SNDATA_ROOT
+tar xzf "$ALCES_DATA"/SNDATA_ROOT_*.tar.gz -C ~/SNDATA_ROOT
+```
+
+`source activate_all.sh` (sección 5) exporta ambas variables y avisa si
+alguna no apunta a una carpeta válida. El `preflight` (sección 8.4) también
+revisa `ALCES_DATA` y la existencia de cada `GENMODEL`/`PATH_NON1ASED` de las
+clases de la campaña antes de lanzar.
+
+Además, `kcor_LSST.fits` es por usuario (queda dentro del repo): se genera
+con `kcor.exe`, ver `pipeline/kcor/README.md`.
+
+### Para quien mantiene la copia compartida
+
+La copia se arma desde la cuenta que tiene los datos curados (hoy
+`mvalenzuela`) con un job SLURM. Primero hay que pedir a soporte NLHPC un
+directorio de proyecto o de grupo donde todos los miembros tengan lectura:
+
+```bash
+cd ~/AUTOSIM
+sbatch pipeline/tools/export_alces_data.sbatch /ruta/compartida/alces_data
+```
+
+El script copia con `rsync`, así que se puede volver a correr para actualizar.
+**Solo en la copia** reescribe las rutas absolutas de los `SIMGEN_INCLUDE`
+(`/home/mvalenzuela/run_SNANA` → `${ALCES_DATA}/run_SNANA`,
+`/home/mvalenzuela/SNDATA_ROOT` → `$SNDATA_ROOT`) y termina con error si
+queda alguna ruta a la cuenta de origen. Los originales no se tocan.
+
+Nota: SNANA escribe `SED.BINARY` **dentro de la carpeta del modelo** para
+los SIMSED con `SIMSED_USE_BINARY: 1`. Ninguna clase de `models.yaml` lo
+usa hoy (todos los que lo usan están en `elastic/model_config/` y no están
+catalogados), así que la copia de solo lectura no causa escrituras. Si se
+agrega una clase así, hay que generar su `SED.BINARY` una vez con la cuenta
+dueña de la copia.
 
 
 ## 3. Crear el entorno Python (venv)
@@ -162,7 +192,8 @@ NLHPC ya tiene SNANA instalado como módulo (Lmod) — no lo compilas tú:
 
 ```bash
 module load SNANA/11.05p
-export SNDATA_ROOT=/home/<tu_usuario>/SNDATA_ROOT
+export SNDATA_ROOT=$HOME/SNDATA_ROOT
+export ALCES_DATA=/ruta/compartida/alces_data   # ver sección 2.5
 ```
 
 **Ojo con mayúsculas:** es `SNANA/11.05p`, no `snana/11.05p` — Lmod
@@ -170,10 +201,13 @@ distingue mayúsculas de minúsculas y falla en silencio con el nombre mal
 escrito (dice "módulo no encontrado", no te avisa que fue un problema de
 capitalización).
 
-Si `$SNDATA_ROOT` todavía no existe como carpeta, créala:
+Si `$SNDATA_ROOT` todavía no existe, descomprime ahí el árbol público de
+SNANA (sección 2.5). Una carpeta vacía no alcanza: SNANA lee de ahí
+`MWDUST`, los filtros y el modelo `NON1ASED.V19_CC+HostXT` que usan 6 clases.
 
 ```bash
 mkdir -p "$SNDATA_ROOT"
+tar xzf "$ALCES_DATA"/SNDATA_ROOT_*.tar.gz -C "$SNDATA_ROOT"
 ```
 
 
@@ -200,7 +234,8 @@ cd ~/AUTOSIM
 source activate_all.sh
 ```
 
-Este script busca el venv solo, carga el módulo, exporta `$SNDATA_ROOT`, y
+Este script busca el venv solo, carga el módulo, exporta `$SNDATA_ROOT` y
+`$ALCES_DATA` (respetando los que ya tengas definidos), y
 termina con la misma verificación de arriba. Siempre con `source` (nunca
 ejecutándolo directo con `./activate_all.sh` o `bash activate_all.sh`) —
 si no, las variables que exporta no quedan activas en tu sesión.

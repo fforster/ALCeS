@@ -22,7 +22,10 @@ import gzip
 import shutil
 from pathlib import Path
 
-SNANA_SALT2_DIR = Path("/home/mvalenzuela/run_SNANA/plasticc_models/SALT2.WFIRST-H17")
+# Fase 94: ALCES_DATA (carpeta compartida) o $HOME, ver local_env.py.
+from local_env import SNANA_HOME
+
+SNANA_SALT2_DIR = SNANA_HOME / "run_SNANA/plasticc_models/SALT2.WFIRST-H17"
 OUT_DIR = Path(__file__).resolve().parent / "salt2_h17_local"
 
 # de SALT2.INFO -> COLORCOR_PARAMS: <min_lambda> <max_lambda> <ncoeffs> <coef1> ... <coefN>

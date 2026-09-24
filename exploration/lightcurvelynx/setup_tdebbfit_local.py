@@ -29,7 +29,10 @@ import gzip
 import shutil
 from pathlib import Path
 
-SRC = Path("/home/mvalenzuela/run_SNANA/elastic/model_libs_updates/NON1ASED.TDE-BBFIT")
+# Fase 94: ALCES_DATA (carpeta compartida) o $HOME, ver local_env.py.
+from local_env import SNANA_HOME
+
+SRC = SNANA_HOME / "run_SNANA/elastic/model_libs_updates/NON1ASED.TDE-BBFIT"
 DST = Path(__file__).resolve().parent / "tdebbfit_local"
 
 

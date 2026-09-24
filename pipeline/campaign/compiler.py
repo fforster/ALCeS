@@ -46,10 +46,23 @@ from pathlib import Path
 import yaml
 
 from . import templates as tpl
+from ..paths import UnresolvedPathError, expand_alces_vars, expand_path
 
 
 class CampaignError(RuntimeError):
     pass
+
+
+def _expand(path_str: str, dry_run: bool) -> str:
+    """Rutas de models.yaml/campaign.yaml con ${ALCES_DATA} etc. (Fase 94)."""
+    if not path_str:
+        return path_str
+    try:
+        return expand_path(path_str)
+    except UnresolvedPathError as exc:
+        if dry_run:
+            return path_str
+        raise CampaignError(str(exc)) from exc
 
 
 @dataclasses.dataclass
@@ -161,9 +174,10 @@ def compile_campaign(
                 run=run, strategy=strat, simlib_path=simlib,
                 mjd_min=mjd_lo, mjd_max=mjd_hi,
                 peakmjd_min=pk_lo, peakmjd_max=pk_hi,
-                kcor_file=defs.get("kcor_file", ""),
-                searcheff_pipeline_file=defs.get("searcheff_pipeline_file", ""),
-                searcheff_pipeline_logic_file=defs.get("searcheff_pipeline_logic_file", ""),
+                kcor_file=_expand(defs.get("kcor_file", ""), dry_run),
+                searcheff_pipeline_file=_expand(defs.get("searcheff_pipeline_file", ""), dry_run),
+                searcheff_pipeline_logic_file=_expand(
+                    defs.get("searcheff_pipeline_logic_file", ""), dry_run),
                 genfilters=defs.get("genfilters", "ugrizY"),
                 solid_angle=defs.get("solid_angle", 0.0),
                 simlib_maxranstart=defs.get("simlib_maxranstart", 1000),
@@ -202,13 +216,27 @@ def compile_campaign(
             # modelos LCLIB cuyo template ya trae la extincion MW aplicada), NO
             # inyectar el default — SNANA aborta con clave duplicada si se repite.
             curated_text = ""
-            curated_path = Path(raw["simgen_include"])
+            simgen_include = _expand(raw["simgen_include"], dry_run)
+            curated_path = Path(simgen_include)
             if curated_path.is_file():
                 curated_text = curated_path.read_text(encoding="utf-8", errors="replace")
+            # Fase 94: en la copia compartida los SIMGEN_INCLUDE usan
+            # ${ALCES_DATA} en GENMODEL/PATH_NON1ASED. Se escribe una copia
+            # expandida junto a los includes generados, asi snlc_sim.exe solo
+            # ve rutas absolutas (no depende del entorno del job SLURM).
+            expanded_text = expand_alces_vars(curated_text)
+            if expanded_text != curated_text:
+                curated_copy = inc_dir / f"curated_{mkey}.INPUT"
+                if not dry_run:
+                    curated_copy.write_text(
+                        f"# Copia expandida (Fase 94) de: {curated_path}\n" + expanded_text,
+                        encoding="utf-8")
+                simgen_include = str(curated_copy.resolve())
+                curated_text = expanded_text
             has_mwebv = bool(re.search(r"(?im)^\s*OPT_MWEBV\s*:", curated_text))
             has_mwcolorlaw = bool(re.search(r"(?im)^\s*OPT_MWCOLORLAW\s*:", curated_text))
             spec = tpl.ModelSpec(
-                key=mkey, simgen_include=raw["simgen_include"], ngen=ngen,
+                key=mkey, simgen_include=simgen_include, ngen=ngen,
                 opt_mwebv=None if has_mwebv else opt_mwebv_default,
                 opt_mwcolorlaw=None if has_mwcolorlaw else opt_mwcolorlaw_default,
             )
@@ -219,7 +247,8 @@ def compile_campaign(
                     f"clase '{mkey}': sin 'simgen_include' y faltan campos SCRATCH {missing}"
                 )
             spec = tpl.ModelSpec(
-                key=mkey, genmodel=raw["genmodel"], genmodel_path=raw.get("genmodel_path", ""),
+                key=mkey, genmodel=raw["genmodel"],
+                genmodel_path=expand_alces_vars(raw.get("genmodel_path", "")),
                 gentype=raw["gentype"], dndz=raw["dndz"],
                 zrange=tuple(raw["zrange"]), trest=tuple(raw["trest"]),
                 minslope_extrap_late=raw.get("minslope_extrap_late"),
@@ -317,7 +346,9 @@ def _render_slurm_script(genversion: str, input_fname: str, batch: dict) -> str:
     mem_per_cpu = batch.get("mem_per_cpu", 2000)
     walltime = batch.get("walltime", "04:00:00")
     mail_user = batch.get("mail_user", "")
-    setup = batch.get("snana_login_setup", "module load SNANA/11.05p").strip()
+    # ${ALCES_DATA}/${ALCES_REPO} se fijan al compilar (Fase 94): el job no
+    # depende de que el usuario los tenga exportados al hacer sbatch.
+    setup = expand_alces_vars(batch.get("snana_login_setup", "module load SNANA/11.05p").strip())
 
     lines = [
         "#!/bin/bash",

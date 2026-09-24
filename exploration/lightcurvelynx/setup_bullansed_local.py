@@ -38,7 +38,10 @@ import shutil
 import zipfile
 from pathlib import Path
 
-SRC = Path("/home/mvalenzuela/run_SNANA/elastic/model_libs_updates/NON1ASED.BULLA-BNS-M2-2COMP")
+# Fase 94: ALCES_DATA (carpeta compartida) o $HOME, ver local_env.py.
+from local_env import SNANA_HOME
+
+SRC = SNANA_HOME / "run_SNANA/elastic/model_libs_updates/NON1ASED.BULLA-BNS-M2-2COMP"
 DST = Path(__file__).resolve().parent / "bullansed_local"
 
 

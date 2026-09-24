@@ -13,6 +13,7 @@ Orden de resolucion del directorio de datos:
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -81,6 +82,56 @@ def repo_root(start: Path | str | None = None) -> Path:
                 return parent
     # Fallback: <repo>/pipeline/paths.py  ->  <repo>
     return Path(__file__).resolve().parent.parent
+
+
+def alces_data() -> Path:
+    """Carpeta con los datos SNANA curados del proyecto (Fase 94).
+
+    Contiene `run_SNANA/` (plantillas, SEARCHEFF, SIMGEN_INCLUDE) y
+    `OTMODEL_NON1ASED/`. Pensada para ser UNA copia compartida de solo
+    lectura para todo el equipo en NLHPC. Orden de resolucion:
+        1. variable de entorno  ALCES_DATA
+        2. variable de entorno  SNANA_HOME  (nombre heredado de la Fase 74)
+        3. el $HOME del usuario (cuenta original: /home/mvalenzuela)
+    """
+    val = os.environ.get("ALCES_DATA") or os.environ.get("SNANA_HOME")
+    return Path(val).expanduser() if val else Path.home()
+
+
+class UnresolvedPathError(ValueError):
+    """Una ruta del catalogo/campanha usa una variable que no esta definida."""
+
+
+def expand_path(path_str: str) -> str:
+    """Expande las variables de ruta portables usadas en models.yaml,
+    campaigns/*.yaml y los SIMGEN_INCLUDE de la copia compartida:
+
+        ${ALCES_DATA}   -> alces_data()   (aunque no este exportada)
+        ${ALCES_REPO}   -> raiz del repo  (aunque no este exportada)
+        $SNDATA_ROOT    -> la del usuario (debe estar exportada)
+        ~               -> $HOME
+
+    Aborta si queda alguna variable sin resolver: SNANA la dejaria tal cual
+    y fallaria dentro del job SLURM, lejos de la causa real.
+    """
+    env = dict(os.environ)
+    env["ALCES_DATA"] = str(alces_data())
+    env["ALCES_REPO"] = str(repo_root())
+    expanded = os.path.expanduser(path_str)
+    for var in re.findall(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?", expanded):
+        if var not in env:
+            raise UnresolvedPathError(
+                f"variable ${var} no definida en la ruta {path_str!r} "
+                f"(¿falta 'source activate_all.sh'?)")
+    return re.sub(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?", lambda m: env[m.group(1)], expanded)
+
+
+def expand_alces_vars(text: str) -> str:
+    """Expande SOLO ${ALCES_DATA}/${ALCES_REPO} dentro del texto de un
+    SIMGEN_INCLUDE. $SNDATA_ROOT y el resto se dejan tal cual: SNANA ya los
+    expande solo, y el job SLURM exporta SNDATA_ROOT."""
+    subs = {"ALCES_DATA": str(alces_data()), "ALCES_REPO": str(repo_root())}
+    return re.sub(r"\$\{?(ALCES_DATA|ALCES_REPO)\}?", lambda m: subs[m.group(1)], text)
 
 
 def data_dir(default_from_yaml: str | None = None) -> Path:

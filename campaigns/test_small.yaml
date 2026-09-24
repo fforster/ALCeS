@@ -36,9 +36,9 @@ defaults:
   # kcor_file: reconstruido de forma reproducible desde pipeline/kcor/kcor_LSST.input
   # (muestra oficial SNANA LSST/baseline_1.9, ver pipeline/kcor/README.md). Contenido
   # verificado idéntico al kcor_LSST.fits anterior (mismo grid/filtros/SED).
-  kcor_file: "/home/mvalenzuela/AUTOSIM/pipeline/kcor/kcor_LSST.fits"
-  searcheff_pipeline_file: "/home/mvalenzuela/run_SNANA/LSST_SEARCHEFF_PIPELINE.DAT"
-  searcheff_pipeline_logic_file: "/home/mvalenzuela/run_SNANA/LSST_PIPELINE_LOGIC.DAT"
+  kcor_file: "${ALCES_REPO}/pipeline/kcor/kcor_LSST.fits"
+  searcheff_pipeline_file: "${ALCES_DATA}/run_SNANA/LSST_SEARCHEFF_PIPELINE.DAT"
+  searcheff_pipeline_logic_file: "${ALCES_DATA}/run_SNANA/LSST_PIPELINE_LOGIC.DAT"
 
 batch:
   # Un sbatch por GENVERSION (patron probado: run_<CLASE>_<fecha>.sh),
@@ -49,4 +49,4 @@ batch:
   mail_user: ""           # opcional: tu correo para --mail-type=END,FAIL
   snana_login_setup: |
     ml  SNANA/11.05p
-    export SNDATA_ROOT=/home/mvalenzuela/SNDATA_ROOT
+    export SNDATA_ROOT=${SNDATA_ROOT:-$HOME/SNDATA_ROOT}

@@ -1,22 +1,25 @@
 # ============================================================================
 # models.yaml — Catalogo de modelos de transientes para SNANA
 # ----------------------------------------------------------------------------
-# MODO PRINCIPAL: 'simgen_include' — ruta absoluta a un SIMGEN_INCLUDE_*.INPUT
-# YA CURADO en tu instalacion real de NLHPC. El compilador de la Capa 2 hace
-# un passthrough (INPUT_FILE_INCLUDE) a ese archivo: no reinventamos DNDZ,
-# pesos por plantilla NON1A, ni rangos — eso ya esta afinado por el autor
-# original de cada SIMGEN_INCLUDE.
+# MODO PRINCIPAL: 'simgen_include' — ruta a un SIMGEN_INCLUDE_*.INPUT YA
+# CURADO. El compilador de la Capa 2 hace un passthrough (INPUT_FILE_INCLUDE)
+# a ese archivo: no reinventamos DNDZ, pesos por plantilla NON1A, ni rangos —
+# eso ya esta afinado por el autor original de cada SIMGEN_INCLUDE.
+#
+# Rutas portables (Fase 94): ${ALCES_DATA} es la carpeta compartida del equipo
+# con run_SNANA/ y OTMODEL_NON1ASED/ (ver INSTALL.md). La expande el
+# compilador; si no esta exportada cae a $HOME (la cuenta original).
 #
 # Rutas verificadas contra:
-#   - listado real por SSH de /home/mvalenzuela/run_SNANA/{model_config,elastic,plasticc_models}
+#   - listado real por SSH de ${ALCES_DATA}/run_SNANA/{model_config,elastic,plasticc_models}
 #   - arbol del repo github.com/mauriciovalenzuela742/Light-curves-Simulations-Vera-Rubin
 #   - contenido real de SIMGEN_INCLUDE_VC25_SNIbc.INPUT (confirma PATH_NON1ASED,
 #     no PATH_SNDATA_SIM como se asumio antes)
 #
-# Dos ubicaciones distintas de SIMGEN_INCLUDE en tu NLHPC:
-#   BASE_MC      = /home/mvalenzuela/run_SNANA/model_config          (canonico, 34 archivos)
-#   BASE_ELASTIC = /home/mvalenzuela/run_SNANA/elastic/model_config  (variantes NON1ASED en desarrollo)
-#   BASE_OT      = /home/mvalenzuela/OTMODEL_NON1ASED/SNtypes        (tus modelos VC25, transporte optico)
+# Tres ubicaciones distintas de SIMGEN_INCLUDE:
+#   BASE_MC      = ${ALCES_DATA}/run_SNANA/model_config          (canonico, 34 archivos)
+#   BASE_ELASTIC = ${ALCES_DATA}/run_SNANA/elastic/model_config  (variantes NON1ASED en desarrollo)
+#   BASE_OT      = ${ALCES_DATA}/OTMODEL_NON1ASED/SNtypes        (modelos VC25, transporte optico)
 #
 # MODO FALLBACK: 'genmodel'+'dndz'+'zrange'+'trest' (sin simgen_include) para
 # clases sin un SIMGEN_INCLUDE curado todavia. Ver templates.py: PATH_NON1ASED
@@ -25,10 +28,10 @@
 # ============================================================================
 
 # ------------------------------------------------------------------
-# PLAsTiCC / estándar  (BASE_MC = /home/mvalenzuela/run_SNANA/model_config)
+# PLAsTiCC / estándar  (BASE_MC = ${ALCES_DATA}/run_SNANA/model_config)
 # ------------------------------------------------------------------
 SNIa:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_SNIa-SALT2.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_SNIa-SALT2.INPUT"
   sim_category: Ia   # unico modelo SALT2 del catalogo; submit_batch_jobs.sh
                       # lo necesita en SIMGEN_INFILE_SNIa (no NONIa). Todos
                       # los demas modelos (NON1ASED/SIMSED/LCLIB) van en NONIa
@@ -37,129 +40,129 @@ SNIa:
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 SNIa-91bg:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_SNIa-91bg.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_SNIa-91bg.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 SNIax:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_SNIax.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_SNIax.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 SNII:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_SNII-Templates.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_SNII-Templates.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 SNII-NMF:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_SNII-NMF.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_SNII-NMF.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 SNIIn-MOSFIT:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_SNIIn-MOSFIT.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_SNIIn-MOSFIT.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 # NOTA: tu instalacion separa Ib y Ic en dos SIMGEN_INCLUDE distintos (no hay
 # un "SNIbc" combinado real). Reemplaza a la antigua clase unica 'SNIbc'.
 SNIb:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_SNIb-Templates.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_SNIb-Templates.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 SNIc:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_SNIc-Templates.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_SNIc-Templates.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 SLSN-I:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_SLSN-I-MOSFIT.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_SLSN-I-MOSFIT.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 TDE:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_TDE-MOSFIT.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_TDE-MOSFIT.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 KN-K17:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_KN-K17.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_KN-K17.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 KN-BULLA19:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_KN-BULLA19.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_KN-BULLA19.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 AGN:
   # GENMODEL real = LCLIB (no SIMSED como se asumio antes)
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_LCLIB_AGN-LSST.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_LCLIB_AGN-LSST.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 RRL:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_LCLIB_RRL-LSST.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_LCLIB_RRL-LSST.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 Mira:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_LCLIB_MIRA-ISW2011.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_LCLIB_MIRA-ISW2011.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 M-dwarf:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_LCLIB_Mdwarf-LSST.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_LCLIB_Mdwarf-LSST.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 EB:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_LCLIB_EB-PHOEBE.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_LCLIB_EB-PHOEBE.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 # Tu instalacion tiene TRES variantes de microlensing (no una sola "uLens"
 # generica). Se listan las tres; full_v5.3.yaml usa PyLIMA como default.
 uLens-Binary:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_LCLIB_uLens-Binary.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_LCLIB_uLens-Binary.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 uLens-Single-GenLens:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_LCLIB_uLens-Single-GenLens.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_LCLIB_uLens-Single-GenLens.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 uLens-Single-PyLIMA:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_LCLIB_uLens-Single-PyLIMA.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_LCLIB_uLens-Single-PyLIMA.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 ILOT:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_ILOT-MOSFIT.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_ILOT-MOSFIT.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 CaRT:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_CART-MOSFIT.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_CART-MOSFIT.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 # Tu instalacion tiene TRES variantes de PISN (no una sola "PISN" generica).
 # full_v5.3.yaml usa MOSFIT como default (es el estandar tipo PLAsTiCC).
 PISN-MOSFIT:
-  simgen_include: "/home/mvalenzuela/run_SNANA/model_config/SIMGEN_INCLUDE_PISN-MOSFIT.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/model_config/SIMGEN_INCLUDE_PISN-MOSFIT.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 PISN-STELLA-HECORE:
-  simgen_include: "/home/mvalenzuela/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_PISN-STELLA-HECORE.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_PISN-STELLA-HECORE.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 2000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 PISN-STELLA-HYDROGENIC:
-  simgen_include: "/home/mvalenzuela/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_PISN-STELLA-HYDROGENIC.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_PISN-STELLA-HYDROGENIC.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 20000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
@@ -167,57 +170,57 @@ PISN-STELLA-HYDROGENIC:
 # Extensiones ELASTiCC / Vincenzi+2019  (BASE_MC)
 # ------------------------------------------------------------------
 V19_SNIb:
-  simgen_include: "/home/mvalenzuela/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_V19_SNIb+HostXT.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_V19_SNIb+HostXT.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 20000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 V19_SNIc:
-  simgen_include: "/home/mvalenzuela/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_V19_SNIc+HostXT.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_V19_SNIc+HostXT.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 20000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 V19_SNIcBL:
-  simgen_include: "/home/mvalenzuela/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_V19_SNIcBL+HostXT.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_V19_SNIcBL+HostXT.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 20000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 V19_SNII:
-  simgen_include: "/home/mvalenzuela/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_V19_SNII+HostXT.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_V19_SNII+HostXT.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 20000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 V19_SNIIb:
-  simgen_include: "/home/mvalenzuela/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_V19_SNIIb+HostXT.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_V19_SNIIb+HostXT.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 20000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 V19_SNIIn:
-  simgen_include: "/home/mvalenzuela/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_V19_SNIIn+HostXT.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_V19_SNIIn+HostXT.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 20000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 Cepheid:
-  simgen_include: "/home/mvalenzuela/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_LCLIB_Cepheid-LSST.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_LCLIB_Cepheid-LSST.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 20000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 d-Scuti:
-  simgen_include: "/home/mvalenzuela/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_LCLIB_d-Sct-LSST.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_LCLIB_d-Sct-LSST.INPUT"
   ngen_wfd: 20000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 20000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 Dwarf_nova:
-  simgen_include: "/home/mvalenzuela/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_LCLIB_dwarf-nova-LSST.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_LCLIB_dwarf-nova-LSST.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 20000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 Mdwarf-flare:
-  simgen_include: "/home/mvalenzuela/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_LCLIB_Mdwarf-flare-LSST.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_LCLIB_Mdwarf-flare-LSST.INPUT"
   ngen_wfd: 200000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 40000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
 KN-BULLA-BNS-M2COMP:
-  simgen_include: "/home/mvalenzuela/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_BULLA-BNS-M2-2COMP.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_BULLA-BNS-M2-2COMP.INPUT"
   ngen_wfd: 20000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 20000   # NGENTOT_LC real (DATASIM_LSST/DDF)
 
@@ -226,29 +229,29 @@ KN-BULLA-BNS-M2COMP:
 # Solo existen en elastic/model_config, no en el canonico BASE_MC.
 # ------------------------------------------------------------------
 SNIax_NON1ASED:
-  simgen_include: "/home/mvalenzuela/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_SNIax_NON1ASED.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_SNIax_NON1ASED.INPUT"
   ngen: 10000   # SIN CALIBRAR: no hay .input real en DATASIM_LSST para esta clase todavia
 
 SNIa-91bg_NON1ASED:
-  simgen_include: "/home/mvalenzuela/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_SNIa-91bg_NON1ASED.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_SNIa-91bg_NON1ASED.INPUT"
   ngen_wfd: 20000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 20000  # ESTIMADO (sin dato real, ver nota abajo)
 
 TDE_NON1ASED:
-  simgen_include: "/home/mvalenzuela/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_TDE_NON1ASED.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_TDE_NON1ASED.INPUT"
   ngen: 10000   # SIN CALIBRAR: no hay .input real en DATASIM_LSST para esta clase todavia
 
 SLSN-I_NON1ASED:
-  simgen_include: "/home/mvalenzuela/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_SLSN-I_NON1ASED.INPUT"
+  simgen_include: "${ALCES_DATA}/run_SNANA/elastic/model_config/SIMGEN_INCLUDE_SLSN-I_NON1ASED.INPUT"
   ngen_wfd: 20000   # NGENTOT_LC real (DATASIM_LSST/WFD)
   ngen_ddf: 20000  # ESTIMADO (sin dato real, ver nota abajo)
 
 # ------------------------------------------------------------------
 # VC25 — tus modelos propios de transporte optico (Ramirez+2024)
-# (BASE_OT = /home/mvalenzuela/OTMODEL_NON1ASED/SNtypes)
+# (BASE_OT = ${ALCES_DATA}/OTMODEL_NON1ASED/SNtypes)
 # ------------------------------------------------------------------
 VC25_SNIbc:
-  simgen_include: "/home/mvalenzuela/OTMODEL_NON1ASED/SNtypes/Ibc/SIMGEN_INCLUDE_VC25_SNIbc.INPUT"
+  simgen_include: "${ALCES_DATA}/OTMODEL_NON1ASED/SNtypes/Ibc/SIMGEN_INCLUDE_VC25_SNIbc.INPUT"
   ngen_wfd: 20000  # ESTIMADO (sin dato real, ver nota abajo)
   ngen_ddf: 20000   # NGENTOT_LC real (DATASIM_LSST/DDF)
   notes: >
@@ -257,14 +260,11 @@ VC25_SNIbc:
     propio SIMGEN_INCLUDE. 22 plantillas OT (ver DOCUMENTATION.README).
 
 VC25_SNII:
-  simgen_include: "/home/mvalenzuela/OTMODEL_NON1ASED/SNtypes/II/SIMGEN_INCLUDE_VC25_SNII.INPUT"
+  simgen_include: "${ALCES_DATA}/OTMODEL_NON1ASED/SNtypes/II/SIMGEN_INCLUDE_VC25_SNII.INPUT"
   ngen_wfd: 20000  # ESTIMADO (sin dato real, ver nota abajo)
   ngen_ddf: 200000   # NGENTOT_LC real (DATASIM_LSST/DDF)
   notes: >
-    Ruta confirmada por el usuario. IMPORTANTE: el archivo tiene un
-    PATH_NON1ASED desactualizado internamente (apunta a
-    /home/mvalenzuela/NON1ASED_VC25_SNII en vez de
-    /home/mvalenzuela/OTMODEL_NON1ASED/SNtypes/II/NON1ASED_VC25_SNII).
-    Corregir esa linea en el archivo original en NLHPC antes de lanzar:
-      sed -i 's#PATH_NON1ASED:.*#PATH_NON1ASED:  /home/mvalenzuela/OTMODEL_NON1ASED/SNtypes/II/NON1ASED_VC25_SNII#' /home/mvalenzuela/OTMODEL_NON1ASED/SNtypes/II/SIMGEN_INCLUDE_VC25_SNII.INPUT
-    31 plantillas OT (ver DOCUMENTATION.README, TYPES: II --> 31).
+    Ruta confirmada por el usuario. El PATH_NON1ASED interno que apuntaba
+    fuera de SNtypes/II/ ya esta corregido (verificado 2026-09-24); la
+    ruta vieja solo queda en SIMGEN_INCLUDE_VC25_SNII_test.INPUT, que no
+    se usa. 31 plantillas OT (ver DOCUMENTATION.README, TYPES: II --> 31).

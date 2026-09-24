@@ -11,12 +11,12 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, "/home/mvalenzuela/AUTOSIM")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # raiz del repo (Fase 94)
 from pipeline.postproc import converter, qc  # noqa: E402
 
-BUILD = Path("/home/mvalenzuela/AUTOSIM/build/full_v5.3_10yrs")
+BUILD = Path(__file__).resolve().parents[2] / "build" / "full_v5.3_10yrs"
 OUT_BASE = BUILD / "postproc"
-DATASIM = Path("/home/mvalenzuela/DATASIM_LSST_1")
+DATASIM = Path.home() / "DATASIM_LSST_1"  # salida SNANA del usuario (Fase 94)
 SIM_ROOTS = {"WFD": DATASIM / "WFD" / "SIMWv8", "DDF": DATASIM / "DDF" / "SIMDv8"}
 
 

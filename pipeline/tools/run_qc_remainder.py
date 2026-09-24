@@ -14,12 +14,12 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, "/home/mvalenzuela/AUTOSIM")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # raiz del repo (Fase 94)
 from pipeline.postprocess import process_genversion  # noqa: E402
 
-DATASIM = Path("/home/mvalenzuela/DATASIM_LSST_1")
+DATASIM = Path.home() / "DATASIM_LSST_1"  # salida SNANA del usuario (Fase 94)
 WFD_ROOT = DATASIM / "WFD" / "SIMWv8"
-BUILD = Path("/home/mvalenzuela/AUTOSIM/build/full_v5.3_10yrs")
+BUILD = Path(__file__).resolve().parents[2] / "build" / "full_v5.3_10yrs"
 OUT_BASE = BUILD / "postproc"
 
 TARGETS = [

@@ -43,6 +43,9 @@ def preflight_check(build_dir: str | Path) -> list[CheckResult]:
     # 2. $SNDATA_ROOT
     results.append(_check_sndata_root())
 
+    # 2b. carpeta de datos compartida (Fase 94)
+    results.append(_check_alces_data())
+
     # 3. SIMLIBs
     results.extend(_check_simlibs(build_dir))
 
@@ -89,6 +92,18 @@ def _check_sndata_root() -> CheckResult:
     return CheckResult("SNDATA_ROOT", True, str(p))
 
 
+def _check_alces_data() -> CheckResult:
+    from ..paths import alces_data
+    d = alces_data()
+    origin = ("ALCES_DATA" if os.environ.get("ALCES_DATA")
+              else "SNANA_HOME" if os.environ.get("SNANA_HOME") else "$HOME por defecto")
+    if not (d / "run_SNANA").is_dir():
+        return CheckResult("ALCES_DATA", False,
+                           f"{d} ({origin}) no contiene run_SNANA/ — exportar ALCES_DATA "
+                           f"apuntando a la copia compartida (ver INSTALL.md)")
+    return CheckResult("ALCES_DATA", True, f"{d} ({origin})")
+
+
 def _check_simlibs(build_dir: Path) -> list[CheckResult]:
     """Parsea los include_survey_*.INPUT buscando SIMLIB_FILE."""
     inc_dir = build_dir / "includes"
@@ -118,12 +133,19 @@ def _check_models(build_dir: Path) -> list[CheckResult]:
     results = []
     if not inc_dir.is_dir():
         return results
-    for f in sorted(inc_dir.glob("include_model_*.INPUT")):
-        model_name = f.stem.replace("include_model_", "")
+    files = sorted(inc_dir.glob("include_model_*.INPUT")) + sorted(inc_dir.glob("curated_*.INPUT"))
+    for f in files:
+        model_name = f.stem.replace("include_model_", "").replace("curated_", "")
         for line in f.read_text().splitlines():
-            for key in ("PATH_NON1ASED:", "PATH_SIMSED:", "INPUT_INCLUDE_FILE:"):
+            line = line.split("#", 1)[0]
+            for key in ("PATH_NON1ASED:", "PATH_SIMSED:", "INPUT_INCLUDE_FILE:",
+                        "GENMODEL:", "GENMODEL_EXTRAP_LATETIME:"):
                 if line.strip().startswith(key):
                     path_str = line.strip().split(key, 1)[1].strip()
+                    # GENMODEL: "LCLIB <ruta> 1+2+3" / "<ruta>" / "SALT2" (sin ruta)
+                    path_str = next((t for t in path_str.split() if "/" in t or "\\" in t), "")
+                    if not path_str:
+                        continue
                     resolved = _resolve_snana_path(path_str)
                     if resolved and resolved.exists():
                         results.append(CheckResult(

@@ -101,9 +101,9 @@ defaults:
   # kcor_file: reconstruido de forma reproducible desde pipeline/kcor/kcor_LSST.input
   # (muestra oficial SNANA LSST/baseline_1.9, ver pipeline/kcor/README.md). Contenido
   # verificado idéntico al kcor_LSST.fits anterior (mismo grid/filtros/SED).
-  kcor_file: "/home/mvalenzuela/AUTOSIM/pipeline/kcor/kcor_LSST.fits"
-  searcheff_pipeline_file: "/home/mvalenzuela/run_SNANA/LSST_SEARCHEFF_PIPELINE.DAT"
-  searcheff_pipeline_logic_file: "/home/mvalenzuela/run_SNANA/LSST_PIPELINE_LOGIC.DAT"
+  kcor_file: "${ALCES_REPO}/pipeline/kcor/kcor_LSST.fits"
+  searcheff_pipeline_file: "${ALCES_DATA}/run_SNANA/LSST_SEARCHEFF_PIPELINE.DAT"
+  searcheff_pipeline_logic_file: "${ALCES_DATA}/run_SNANA/LSST_PIPELINE_LOGIC.DAT"
 
 # --- SLURM: un sbatch por GENVERSION (patron probado run_<CLASE>_<fecha>.sh) ---
 batch:
@@ -113,6 +113,6 @@ batch:
   mail_user: ""           # opcional: tu correo para --mail-type=END,FAIL
   snana_login_setup: |
     ml  SNANA/11.05p
-    export SNDATA_ROOT=/home/mvalenzuela/SNDATA_ROOT
-    export PATH=$HOME/AUTOSIM/bin/snana_custom:$PATH
+    export SNDATA_ROOT=${SNDATA_ROOT:-$HOME/SNDATA_ROOT}
+    export PATH=${ALCES_DATA}/bin/snana_custom:${ALCES_REPO}/bin/snana_custom:$PATH
     export LD_LIBRARY_PATH=/home/modules/spack/opt/spack/linux-rocky9-zen4/aocc-4.2.0/cfitsio-4.4.0-3g3y7mzaigrbbxm3e2lmghmg37cavzge/lib:/home/modules/spack/opt/spack/linux-rocky9-zen4/gcc-14.2.0/gsl-2.8-qpko6b5lua5ufqfpif2g6zzeecls7gxk/lib:$LD_LIBRARY_PATH

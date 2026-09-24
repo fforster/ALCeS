@@ -9961,3 +9961,106 @@ Modificado: `run_simsed_poc.py` (`resolve_effective_class_config` nueva, `main()
 `sweep_worker.py::run_one()`, `sweep_generate.py` (`available_classes_redshift_range()`,
 `generate_sweep()`, CLI `--z-max`), `webapp/app.py` (`index()`, `generate()`),
 `webapp/templates/index.html`. `NOTES.md`: esta entrada.
+
+## Fase 94 -- rutas portables entre cuentas NLHPC: `ALCES_DATA` como carpeta compartida del equipo
+
+### Motivación
+
+El profesor empezó a instalar ALCeS con su propia cuenta de NLHPC (`fforster`, grupo
+`astrolab_cmm`, distinto de `users`). Para que pudiera leer las plantillas se le dio acceso con ACL
+(ver más abajo), pero la idea es que **cada miembro del equipo** pueda instalar y usar el pipeline
+con su cuenta, sin depender del `$HOME` de `mvalenzuela` ni editar rutas a mano. Decisión del
+usuario: **una sola copia compartida** de los datos en NLHPC (no una copia de 19 GB por persona).
+
+### Inventario real de rutas a `/home/mvalenzuela` (antes de esta fase)
+
+Tres niveles, no uno:
+
+1. **Código**: `setup_*_local.py` (5), `pipeline/tools/run_qc_*.py` y `refresh_redshift_qc.py`.
+2. **Configuración**: `pipeline/models.yaml` (42 `simgen_include`), `campaigns/*.yaml` (kcor,
+   SEARCHEFF, `export SNDATA_ROOT`, `PATH` del binario custom), `activate_all.sh`, `setup_autosim.py`.
+3. **Los datos mismos** (el nivel que nadie veía): 44 `SIMGEN_INCLUDE_*.INPUT` dentro de
+   `run_SNANA/` y `OTMODEL_NON1ASED/` apuntan en `GENMODEL`/`PATH_NON1ASED`/
+   `GENMODEL_EXTRAP_LATETIME` a `/home/mvalenzuela/{run_SNANA,OTMODEL_NON1ASED,SNDATA_ROOT}`. Una
+   copia de `run_SNANA` en otra cuenta **seguiría leyendo de la cuenta original**: funciona mientras
+   dure el permiso y deja de funcionar sin aviso el día que se quita.
+
+Hallazgos colaterales verificados en NLHPC:
+
+- 6 includes apuntan a `SNDATA_ROOT/models/NON1ASED/NON1ASED.V19_CC+HostXT`: está en la
+  distribución **pública** de SNANA (`SNDATA_ROOT_2024-07-03.tar.gz`, verificado con `tar tzf`), así
+  que se reescriben a `$SNDATA_ROOT` (de cada usuario), no a la carpeta compartida.
+- El módulo `SNANA/11.05p` de NLHPC **no** define `SNDATA_ROOT` (`module show`): cada usuario
+  necesita descomprimir el árbol público. `INSTALL.md` §4 decía crear una carpeta vacía, lo que no
+  sirve (SNANA lee `MWDUST`, filtros y el modelo V19 de ahí). Corregido.
+- `SIMSED_USE_BINARY: 1` hace que SNANA escriba `SED.BINARY` **en la carpeta del modelo**
+  (`genmag_SIMSED.c`, `bin1File = SIMSED_PATHMODEL/...`; la tabla de flujos va a
+  `SIMSED_PATH_BINARY`, cuyo default es `./`). Riesgo para una copia de solo lectura, pero ninguno
+  de los 10 includes con `USE_BINARY: 1` (todos en `elastic/model_config/`, además los únicos con
+  `$PLASTICC_MODELS`) está catalogado en `models.yaml`. Documentado en `INSTALL.md` §2.5.
+- `bin/snana_custom/snlc_sim.exe` (necesario para DDF por `MXOBS_SIMLIB`) no está en git: va a la
+  carpeta compartida.
+
+### Cambio real
+
+- `pipeline/paths.py`: `alces_data()` (`ALCES_DATA` → `SNANA_HOME` → `$HOME`), `expand_path()`
+  (`${ALCES_DATA}`, `${ALCES_REPO}` = raíz del repo aunque no esté exportada, `$SNDATA_ROOT`, `~`;
+  aborta con `UnresolvedPathError` si queda una variable indefinida) y `expand_alces_vars()` (solo
+  las dos `ALCES_*`, para texto de un include; `$SNDATA_ROOT` se deja a SNANA).
+- `pipeline/campaign/compiler.py`: expande `kcor_file`/SEARCHEFF/`simgen_include` al compilar
+  (error de compilación claro en vez de un abort de SNANA dentro del job). Si el include curado
+  tiene `${ALCES_*}` por dentro, escribe `includes/curated_<clase>.INPUT` expandido y el
+  `include_model_` apunta a esa copia: `snlc_sim.exe` solo ve rutas absolutas. `snana_login_setup`
+  también se expande al compilar.
+- `pipeline/orchestrate/preflight.py`: nuevo check `ALCES_DATA` (debe contener `run_SNANA/`) y
+  `_check_models` ahora revisa también `GENMODEL`/`GENMODEL_EXTRAP_LATETIME` de las copias
+  `curated_*`.
+- YAML: `models.yaml` y `campaigns/*.yaml` usan `${ALCES_DATA}`/`${ALCES_REPO}`/`$SNDATA_ROOT`;
+  el `PATH` del job busca el binario custom primero en `${ALCES_DATA}/bin/snana_custom` y después
+  en `${ALCES_REPO}/bin/snana_custom` (sin cambios para la cuenta original).
+- `local_env.py`: `SNANA_HOME` respeta `ALCES_DATA` primero. Los 5 `setup_*_local.py` usan
+  `SNANA_HOME` en vez de la ruta fija. Herramientas de QC: repo desde `__file__`, salida SNANA
+  desde `Path.home()`.
+- `activate_all.sh`: `SNDATA_ROOT`/`ALCES_DATA` con default y aviso si no son válidos.
+- `pipeline/tools/export_alces_data.sbatch` (nuevo): arma la copia compartida con `rsync`
+  (`run_SNANA` sin `.git`, `OTMODEL_NON1ASED`, binario custom, tarball público) y reescribe **solo en
+  la copia** las rutas absolutas de los `.INPUT`; aborta si `DEST` es el home de origen y si queda
+  alguna ruta a la cuenta de origen.
+
+### Validación real
+
+- Local: `tests/test_paths_portability.py` (nuevo, 21 checks), `tests/test_simlib_core.py` y
+  `compile_campaign --self-test`: todo OK.
+- NLHPC, **regresión en la cuenta original** (sin `ALCES_DATA`): `full_v5.3.yaml` compilada con
+  el código de HEAD y con el nuevo, diff normalizado por la ruta del repo → los 42 `include_model_`
+  y los `include_survey_` **idénticos**; solo cambian las 2 líneas del script SLURM
+  (`SNDATA_ROOT`, `PATH`), equivalentes en la cuenta original.
+- NLHPC, **caso otro usuario**: espejo de la carpeta compartida (symlinks a los datos + copias
+  reales de los `.INPUT`), mismas reescrituras que el script → 44 `.INPUT` reescritos, 0 con rutas
+  a la cuenta de origen, originales intactos (mismo conteo antes y después; ese conteo incluye 5
+  respaldos `.INPUT.bak` sin uso que el script no toca). Compilación con `ALCES_DATA` apuntando al espejo: 34 `curated_*`, ninguno
+  con `${ALCES` ni rutas a `/home/mvalenzuela/run_SNANA`; `preflight` 82 checks, único fallo
+  `snlc_sim.exe` fuera del `PATH` (módulo SNANA no cargado en la prueba).
+- **Pendiente**: correr `export_alces_data.sbatch` sobre el directorio compartido real (hay que
+  pedirlo a soporte NLHPC) y lanzar una clase chica desde una segunda cuenta.
+
+### Acceso ACL de `fforster` (mismo día, previo a esta fase)
+
+`/home` es GPFS con ACL **NFSv4**: `setfacl` responde `Operation not supported`; se usan
+`mmgetacl`/`mmputacl` (`/usr/lpp/mmfs/bin`). En NFSv4 los `allow` se **suman** (no hay prioridad
+de la entrada nominal sobre `other` como en POSIX), así que `run_SNANA` (777) le habría dado
+escritura vía `everyone@`: se hizo `chmod -R o-rwx` antes. Además, al darle `x` al home, quedaban
+alcanzables archivos con permisos abiertos (`.ssh/id_rsa` 777, `.bashrc` escribible): se quitó
+`other` de todo lo que cuelga del home (sin efecto previo, porque el home era 700) y las claves
+quedaron en 600. Resultado: `user:fforster:--x-` en el home, `r-x-` heredable en `run_SNANA`
+(15 606 entradas, job SLURM 13312334, 0 fallos). Cuando exista la carpeta compartida, este acceso
+se puede retirar.
+
+### Archivos de esta fase
+
+`pipeline/paths.py`, `pipeline/campaign/compiler.py`, `pipeline/orchestrate/preflight.py`,
+`pipeline/models.yaml`, `campaigns/full_v5.3.yaml`, `campaigns/test_small.yaml`, `setup_autosim.py`,
+`activate_all.sh`, `pipeline/tools/{run_qc_full,run_qc_remainder,refresh_redshift_qc}.py`,
+`pipeline/tools/export_alces_data.sbatch` (nuevo), `tests/test_paths_portability.py` (nuevo),
+`exploration/lightcurvelynx/{local_env,setup_*_local}.py`, `INSTALL.md`,
+`exploration/lightcurvelynx/HOWTO_LOCAL.md`.
