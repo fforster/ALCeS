@@ -23,3 +23,12 @@ pyyaml
 # sola dependencia liviana (sin uvicorn/pydantic/starlette de FastAPI --
 # todo lo que llama es sincrono/bloqueante, el modelo async no aporta nada).
 flask
+
+# Fase 95: "Explore" de la webapp -- ejecuta un notebook de analisis por
+# sweep en el servidor (nbclient) y lo muestra celda por celda. ipykernel
+# es el kernel python3 de este mismo venv; nbconvert se usa solo para
+# markdown2html/strip_ansi al renderizar las celdas.
+nbclient
+nbformat
+nbconvert
+ipykernel

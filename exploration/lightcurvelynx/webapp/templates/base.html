@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="es">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -28,15 +28,29 @@
   .class-row { display: flex; align-items: center; gap: 0.8rem; margin: 0.3rem 0; }
   .hint { color: #666; font-size: 0.85rem; }
   .qc-links a { margin-right: 0.6rem; }
+  /* Fase 95: celdas del notebook de Explore */
+  p code { overflow-wrap: anywhere; }  /* rutas largas sin espacios no deben ensanchar la pagina */
+  .nb-cell { margin: 0.8rem 0; border-left: 3px solid transparent; padding-left: 0.6rem; min-width: 0; max-width: 100%; }
+  .nb-cell .anchor-link { display: none; }  /* el "¶" que agrega markdown2html */
+  .nb-cell.running { border-left-color: #e0a800; }
+  .nb-cell.pending { opacity: 0.45; }
+  .nb-cell.errored { border-left-color: #b3261e; }
+  .nb-prompt { color: #888; font-family: monospace; font-size: 0.78rem; }
+  .nb-source { background: #f7f9fa; border: 1px solid #e3e7ea; margin: 0.2rem 0; }
+  .nb-outputs img { max-width: 100%; display: block; margin: 0.4rem 0; }
+  .nb-outputs .out-html { overflow-x: auto; }
+  .nb-outputs pre.out-error { background: #fdecea; color: #7a1c14; }
+  .progress { background: #e3e7ea; border-radius: 4px; height: 8px; overflow: hidden; max-width: 420px; }
+  .progress > div { background: #0f8f86; height: 100%; width: 0; transition: width 0.4s; }
 </style>
 </head>
 <body>
 <nav>
-  <a href="{{ url_for('index') }}">Generar sweep</a>
+  <a href="{{ url_for('index') }}">Generate sweep</a>
   <a href="{{ url_for('sweeps_list') }}">Sweeps</a>
-  <a href="{{ url_for('history') }}">Historial</a>
+  <a href="{{ url_for('history') }}">History</a>
 </nav>
-<h1>{% block heading %}LightCurveLynx — generador de sweeps{% endblock %}</h1>
+<h1>{% block heading %}LightCurveLynx — sweep generator{% endblock %}</h1>
 {% with messages = get_flashed_messages() %}
   {% if messages %}{% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}{% endif %}
 {% endwith %}

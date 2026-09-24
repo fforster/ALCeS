@@ -10064,3 +10064,142 @@ se puede retirar.
 `pipeline/tools/export_alces_data.sbatch` (nuevo), `tests/test_paths_portability.py` (nuevo),
 `exploration/lightcurvelynx/{local_env,setup_*_local}.py`, `INSTALL.md`,
 `exploration/lightcurvelynx/HOWTO_LOCAL.md`.
+
+## Fase 95 -- "Explore": notebook de análisis ejecutado en vivo por sweep + webapp en inglés
+
+### Motivación
+
+Pedido del usuario: poder **explorar los resultados desde la misma página** de la webapp, "viendo
+cómo corre un notebook de Jupyter", y **traducir toda la página al inglés**. Hasta ahora los
+resultados solo se veían como miniaturas de QC, el panel agregado (Fase 91) y el `summary.json` de
+cada corrida. Opciones consideradas con el usuario: notebook ejecutado en vivo (elegida), JupyterLab
+embebido (interactivo, pero con un segundo puerto por el túnel y kernels libres en el login node
+compartido) o un explorador nativo sin notebooks. Traducción: todo lo visible (plantillas, flash, JS
+y los errores de `sweep_*.py` que llegan a la página); comentarios y `NOTES.md` siguen en español.
+
+### Cambio real
+
+- `sweep_explore.py` (nuevo): `build_notebook()` arma un notebook **autocontenido** (no importa
+  `sweep_*`; lee `manifest.json`, `run_hash.json`, `summary.json` y los parquet desde `SWEEP_DIR`)
+  con las secciones de `analyze_phot_df.ipynb` (Fase 17) adaptadas a `runs/<hash>/`: inventario,
+  eficiencia por clase/estrategia (media ± dispersión entre semillas), redshift/`NOBS`, eficiencia
+  vs. z, `phot_df` (SNR, bandas, 3 curvas de luz; si no hay `keep_phot`, un aviso) y DDF vs. WFD.
+  `start()` lo ejecuta en un hilo con `nbclient` (`setup_kernel()` + `execute_cell()` celda por
+  celda, `allow_errors=True`, 180 s por celda) y escribe **después de cada celda** el `.ipynb`
+  parcial (escritura atómica, la webapp lo lee mientras corre) y `explore/status.json`. `state()`
+  devuelve el estado más las celdas ya renderizadas a HTML (markdown con `markdown2html`, PNG embebido,
+  tablas de pandas, tracebacks sin ANSI). Guard de concurrencia `_RUNNING`/`_RUNNING_LOCK`, mismo
+  patrón que la webapp.
+- Kernel por **sockets IPC** (`KernelManager(transport="ipc")`, archivos en `explore/`) en vez de
+  TCP en `127.0.0.1`: el login node es compartido. Los mensajes del kernel ya iban firmados con
+  HMAC, pero así no queda ningún puerto del kernel expuesto a otros usuarios del nodo.
+- Estado `interrupted`: si `status.json` dice `running` pero no hay hilo vivo (el proceso Flask murió
+  a mitad de camino), `state()` lo reporta así; la página no queda consultando para siempre. La
+  lectura usa el mismo candado que `start()`, así no hay falso `interrupted` justo al arrancar.
+- `webapp/app.py`: rutas `/sweep/<safe:name>/explore` (página), `/explore/run` (POST),
+  `/explore/state` (JSON, 404 sin manifiesto) y `/explore/notebook.ipynb` (descarga). Todos los
+  `flash()` y errores JSON en inglés.
+- Plantillas: `explore.html` nueva (progreso `cell k/N`, marcador `[*]`, celdas pendientes
+  atenuadas, polling cada 1,5 s con el patrón `pollLoop` de `sweep_status.html`); enlace **Explore
+  results** en `sweep_status.html` (aparece solo, vía el polling, con la primera corrida `done`) y
+  columna **Explore** en `sweeps_list.html`. Las 7 plantillas existentes, traducidas
+  (`lang="en"`).
+- Mensajes de error en inglés en `sweep_generate.py`, `sweep_compile.py` y
+  `sweep_publish_dataset.py`. **Trampa evitada**: `run_simsed_poc.py` está en
+  `sweep_hash.CODE_FILES`; traducir su `ValueError` de `z_max` habría cambiado el `code_hash` y,
+  con él, **todos los `run_hash` futuros** con física idéntica. Se revirtió ese cambio y el mensaje
+  en inglés se arma en `sweep_generate.py` (fuera del hash), con el mismo validador de siempre
+  (`resolve_effective_class_config`).
+- `requirements.txt`: `nbclient`, `nbformat`, `nbconvert`, `ipykernel` (NLHPC ya los tenía; la
+  máquina del profesor no).
+
+### Validación real
+
+- `test_sweep_explore.py` (nuevo, en NLHPC con el venv real): sweep sintético con DDF+WFD, con y sin
+  `phot_df` → `done`, 0 celdas con error, gráficos embebidos, aviso sin `phot_df`, `.ipynb` válido
+  (`nbformat.validate`); rutas Flask (404 con nombre inválido o sweep inexistente, página en inglés,
+  `/explore/state`, descarga). **23/23 OK**.
+- End-to-end en NLHPC (copia de prueba con el código nuevo y symlinks a los datos reales, webapp en
+  el puerto 5055 porque el 5000 de `leftraru2` lo tenía otra instancia vieja, más túnel y navegador):
+  `live_demo_fase91` (2 corridas) y `fase65_rebarrido` (65 corridas, 13 clases) → 16/16 celdas,
+  0 errores, terminan en menos de 3 s; consultando el estado cada 0,3 s se observan los estados
+  intermedios (`running` en la celda 0, luego la 1, luego la 7 con 3 celdas ejecutadas, y `done`).
+  Sin errores en la consola del navegador. Formulario inválido (sin clases, sin estrategia, nombre
+  inválido, semillas no numéricas) → los 4 mensajes llegan en inglés y no se crea ningún sweep.
+- Ajustes encontrados en la prueba visual: la ruta larga del `.ipynb` (un `<code>` sin espacios)
+  ensanchaba la página → `overflow-wrap: anywhere`; se ocultó el `¶` que agrega `markdown2html`.
+- **Pendiente**: sincronizar el código a `~/AUTOSIM` en NLHPC (la instancia que corre ahí sigue con
+  el código anterior).
+
+### Archivos de esta fase
+
+Nuevos: `sweep_explore.py`, `test_sweep_explore.py`, `webapp/templates/explore.html`. Modificados:
+`webapp/app.py`, `webapp/templates/{base,index,sweep_status,sweeps_list,run_summary,dataset,history}.html`,
+`sweep_generate.py`, `sweep_compile.py`, `sweep_publish_dataset.py`, `requirements.txt`,
+`HOWTO_WEBAPP.md`, `NOTES.md`.
+
+## Fase 96 -- webapp en NLHPC independiente del login node: `open_nlhpc.sh` + socket Unix + vigilante
+
+### Motivación
+
+Durante la prueba de la Fase 95, el alias `nlhpc` pasó de caer en `leftraru1` a caer en
+`leftraru2` (y después de vuelta, sin poder elegir). La app se levantaba con `nohup` en una
+conexión SSH y el túnel se abría en otra, así que el túnel podía llegar a un nodo sin app. Además,
+cada `nohup` quedaba huérfano: en `leftraru2` había una webapp del 14-sep (PID 1414544,
+`127.0.0.1:5000`) y un bucle `curl` del 6-sep (PID 595126), y la app de prueba de la Fase 95 quedó
+allí sin poder volver a ese nodo para cerrarla. Pedido del usuario: que funcione igual en cualquier
+login node, para que cualquiera del equipo la pueda correr sin problemas.
+
+### Cambio real
+
+- `webapp/open_nlhpc.sh` (nuevo, se corre en la máquina local; Git Bash, Linux o macOS): **una sola**
+  conexión `ssh -tt -L 127.0.0.1:<puerto>:<socket remoto> nlhpc "bash serve_nlhpc.sh <socket>"`.
+  El túnel llega siempre al nodo donde corre la app. El socket se nombra por sesión
+  (`~/.alces/webapp-<epoch>-<rand>.sock`), así que las sesiones no se pisan. Abre el navegador cuando
+  la app responde. Opciones: `ALCES_SSH_HOST`, `ALCES_REMOTE_REPO` y `ALCES_NO_BROWSER=1`.
+- `webapp/serve_nlhpc.sh` (nuevo, se corre en el login node): crea `~/.alces` con permisos 700,
+  carga el módulo y el venv, y lanza `app.py --socket`. Un **vigilante** revisa cada 3 s que el
+  proceso padre (la sesión de `sshd`) siga vivo; si no, detiene la app y sus kernels y borra el
+  socket.
+- `webapp/app.py`: `main()` con `--socket RUTA` (`run_simple("unix://...")`; se niega si el
+  directorio no es privado) y `--port`. Sin argumentos se comporta igual que antes (máquina local).
+- **Seguridad**: en un login node el `127.0.0.1` es compartido por todos los usuarios del nodo. Con
+  la app en `127.0.0.1:5000`, cualquiera de ellos podía abrirla y lanzar sweeps (sbatch) con la
+  cuenta de quien la corría. El socket dentro de `~/.alces` (700) solo lo abre su dueño. No se tocó
+  el `umask` del proceso para proteger el socket: habría dejado con permisos 600 los sweeps que
+  genera la webapp.
+
+### Bugs encontrados en la prueba real (y corregidos)
+
+1. **La app quedaba huérfana sin terminal**: lanzado sin terminal local, `-tt` no consiguió una pty
+   remota (`tty ?` en `ps`), así que al cortar la conexión no llegó SIGHUP y quedaron vivos
+   `serve_nlhpc.sh`, `app.py` y un kernel (reparentados a PID 1). Por eso existe el vigilante del
+   proceso padre, que no depende de la pty.
+2. **Cada exploración (Fase 95) dejaba un kernel `ipykernel` vivo**: al pasarle un `km=` propio,
+   `nbclient` asume que el kernel no es suyo y no lo apaga al salir de `setup_kernel()`. En las
+   pruebas de la Fase 95 no se vio porque la app siempre se mataba al final. Corrección: un `finally`
+   con `km.shutdown_kernel(now=True)` en `sweep_explore._execute`, más un check nuevo en
+   `test_sweep_explore.py` (sin procesos `ipykernel` hijos al terminar).
+3. **El navegador nunca se abría en Windows**: el `MSYS_NO_PATHCONV=1` que el lanzador necesita (si
+   no, Git Bash convierte `-L 5000:/home/...` en `5000:C:/Program Files/Git/home/...`) hacía que
+   `curl -o /dev/null` intentara escribir en `C:\dev\null`; el sondeo fallaba para siempre. Ahora se
+   redirige con `>/dev/null` desde bash.
+
+### Validación real
+
+- `test_sweep_explore.py` en NLHPC: **25/25 OK** (incluye los 2 checks nuevos de kernels huérfanos).
+- `open_nlhpc.sh` desde Windows (Git Bash) contra una copia de prueba en NLHPC: la app arrancó en
+  `leftraru1`, respondió por el túnel y Explore corrió sobre `fase65_rebarrido` (`done`, 0 errores).
+  Se probaron dos formas de corte: **matar el `ssh.exe` local de golpe** y **terminar el script
+  lanzador** (`timeout`). En los dos casos el nodo quedó sin procesos de la app, sin kernels y sin
+  sockets en `~/.alces`. El sondeo imprime la URL una sola vez.
+- **Pendiente**: la webapp vieja (PID 1414544), el bucle del 6-sep (PID 595126) y la app de prueba
+  de la Fase 95 (puerto 5055) siguen en `leftraru2`. En 10 intentos el balanceador no volvió a
+  mandar la conexión a ese nodo. Se cierran con `pkill -u $USER -f webapp/app.py` la próxima vez que
+  se caiga ahí.
+
+### Archivos de esta fase
+
+Nuevos: `webapp/open_nlhpc.sh`, `webapp/serve_nlhpc.sh`. Modificados: `webapp/app.py` (`main()`),
+`sweep_explore.py` (apagado del kernel), `test_sweep_explore.py`, `HOWTO_WEBAPP.md` (§3-bis),
+`NOTES.md`.

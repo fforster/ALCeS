@@ -1,12 +1,11 @@
 {% extends "base.html" %}
 {% block heading %}Sweeps{% endblock %}
 {% block content %}
-<p class="hint">Todos los sweeps ya compilados en esta máquina — para volver a uno después de
-salir de su página, sin tener que recordar el nombre. Cada uno vive en disco en
-<code>{{ sweep_runs_dir }}/&lt;nombre&gt;/</code>.</p>
-
+<p class="hint">Every sweep compiled on this machine — to get back to one after leaving its page,
+without having to remember its name. Each one lives on disk in
+<code>{{ sweep_runs_dir }}/&lt;name&gt;/</code>.</p>
 <table>
-  <thead><tr><th>Sweep</th><th>Compilado</th><th>Corridas</th><th>Estado</th><th>Fotometría</th><th>z máx.</th></tr></thead>
+  <thead><tr><th>Sweep</th><th>Compiled</th><th>Runs</th><th>Status</th><th>Photometry</th><th>z max.</th><th>Results</th></tr></thead>
   <tbody>
     {% for s in sweeps %}
     <tr>
@@ -18,11 +17,12 @@ salir de su página, sin tener que recordar el nombre. Cada uno vive en disco en
         {% elif s.n_failed > 0 %}<span class="status-failed">{{ s.n_done }} done, {{ s.n_failed }} failed</span>
         {% else %}<span class="status-running">{{ s.n_done }}/{{ s.n_runs }} done</span>{% endif %}
       </td>
-      <td>{{ "preservada (keep_phot)" if s.keep_phot else "—" }}</td>
+      <td>{{ "kept (keep_phot)" if s.keep_phot else "—" }}</td>
       <td>{{ "%.3f"|format(s.zmax.z_max_simulado) if s.zmax else "—" }}</td>
+      <td>{% if s.n_done > 0 %}<a href="{{ url_for('sweep_explore_page', name=s.name) }}">Explore</a>{% else %}—{% endif %}</td>
     </tr>
     {% else %}
-    <tr><td colspan="6" class="hint">Sin sweeps todavía — <a href="{{ url_for('index') }}">generar uno</a>.</td></tr>
+    <tr><td colspan="7" class="hint">No sweeps yet — <a href="{{ url_for('index') }}">generate one</a>.</td></tr>
     {% endfor %}
   </tbody>
 </table>

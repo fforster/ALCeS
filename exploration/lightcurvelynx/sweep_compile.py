@@ -65,7 +65,7 @@ def build_runs(sweep_cfg: dict, code_hash_value: str) -> list[dict]:
     unknown = [c for c in classes if c not in CLASS_CONFIGS]
     if unknown:
         raise ValueError(
-            f"clases desconocidas (no estan en CLASS_CONFIGS real de run_simsed_poc.py): {unknown}"
+            f"Unknown classes (not in CLASS_CONFIGS of run_simsed_poc.py): {unknown}"
         )
 
     rows = []
@@ -109,9 +109,9 @@ def build_runs(sweep_cfg: dict, code_hash_value: str) -> list[dict]:
         if r["run_hash"] in seen_hashes:
             other = rows[seen_hashes[r["run_hash"]]]
             raise ValueError(
-                f"colision de run_hash real entre dos filas del sweep: "
-                f"{other['class_key']}/seed{other['seed_index']} y {r['class_key']}/seed{r['seed_index']} "
-                f"-- esto no deberia pasar salvo bug del esquema de hash, no se compila."
+                f"run_hash collision between two rows of the sweep: "
+                f"{other['class_key']}/seed{other['seed_index']} and {r['class_key']}/seed{r['seed_index']} "
+                f"-- this should never happen unless the hash scheme has a bug; not compiling."
             )
         seen_hashes[r["run_hash"]] = i
         r["index"] = i
@@ -168,10 +168,10 @@ def compile_sweep(yaml_path: Path, force: bool = False, triggered_by: str = "cli
     manifest_path = out_dir / "manifest.json"
     if manifest_path.exists() and not force:
         raise FileExistsError(
-            f"{manifest_path} ya existe -- pasa --force para recompilar. "
-            f"Cuidado: recompilar cambia los run_hash si CLASS_CONFIGS o el codigo cambiaron, "
-            f"corridas ya lanzadas bajo el manifiesto viejo quedan huerfanas (sus resultados en "
-            f"runs/<hash-viejo>/ siguen siendo validos, simplemente el manifiesto nuevo no los lista)."
+            f"{manifest_path} already exists -- pass --force to recompile. "
+            f"Careful: recompiling changes the run_hash values if CLASS_CONFIGS or the code changed; "
+            f"runs launched under the old manifest become orphaned (their results in "
+            f"runs/<old-hash>/ remain valid, the new manifest just does not list them)."
         )
 
     code_hash_value = sweep_hash.code_hash(HERE)

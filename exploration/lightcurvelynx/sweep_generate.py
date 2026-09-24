@@ -76,15 +76,14 @@ def validate_classes(classes: list[str]) -> list[str]:
     for c in classes:
         if c not in CLASS_CONFIGS:
             errors.append(
-                f"'{c}': no es una clase real del catalogo (no esta en CLASS_CONFIGS de "
-                f"run_simsed_poc.py). Clases reales: {sorted(CLASS_CONFIGS)}"
+                f"'{c}': not a class of the catalog (not in CLASS_CONFIGS of "
+                f"run_simsed_poc.py). Available classes: {sorted(CLASS_CONFIGS)}"
             )
         elif c not in avail:
             errors.append(
-                f"'{c}': es una clase real del catalogo pero sin datos vendorizados "
-                f"localmente (su simsed_dir no existe o esta vacio en esta maquina) -- "
-                f"correr 'python3 vendor_snana_class.py {c}' en NLHPC primero, empaquetar "
-                f"el resultado, y extraerlo aqui (ver HOWTO_LOCAL.md)."
+                f"'{c}': a catalog class without vendored data on this machine (its "
+                f"simsed_dir is missing or empty) -- run 'python3 vendor_snana_class.py {c}' "
+                f"on NLHPC first, package the result and extract it here (see HOWTO_LOCAL.md)."
             )
     return errors
 
@@ -107,25 +106,25 @@ def generate_sweep(
 ) -> Path:
     if not SWEEP_NAME_RE.match(sweep_name):
         raise ValueError(
-            f"sweep_name '{sweep_name}' invalido -- debe matchear {SWEEP_NAME_RE.pattern} "
-            f"(letras/digitos/guion/guion-bajo, 1-64 caracteres). Esto evita nombres que "
-            f"rompan la ruta real sweep_runs/<sweep_name>/ (p.ej. '/', '..', espacios)."
+            f"Invalid sweep name '{sweep_name}' -- it must match {SWEEP_NAME_RE.pattern} "
+            f"(letters/digits/hyphen/underscore, 1-64 characters), so it cannot break the "
+            f"sweep_runs/<sweep_name>/ path (e.g. '/', '..', spaces)."
         )
     if not classes:
-        raise ValueError("classes no puede estar vacio -- ninguna clase que simular")
+        raise ValueError("No classes selected -- choose at least one class to simulate.")
     if not seeds:
-        raise ValueError("seeds no puede estar vacio -- ninguna semilla que correr")
+        raise ValueError("No seeds given -- enter at least one seed (e.g. '0').")
 
     errors = validate_classes(classes)
     if errors:
-        raise ValueError("clases invalidas:\n  - " + "\n  - ".join(errors))
+        raise ValueError("Invalid classes:\n  - " + "\n  - ".join(errors))
 
     out_path = SWEEPS_DIR / f"{sweep_name}.yaml"
     if out_path.exists() and not force:
         raise FileExistsError(
-            f"{out_path} ya existe -- pasa force=True para sobreescribir. "
-            f"Cuidado: si ya fue compilado (sweep_runs/{sweep_name}/manifest.json), "
-            f"sobreescribir el YAML sin recompilar deja el manifiesto desactualizado."
+            f"{out_path} already exists -- choose another sweep name (or pass force=True to "
+            f"overwrite). Careful: if it was already compiled (sweep_runs/{sweep_name}/manifest.json), "
+            f"overwriting the YAML without recompiling leaves the manifest out of date."
         )
 
     ngentot_overrides = dict(ngentot_overrides or {})
@@ -141,12 +140,19 @@ def generate_sweep(
     z_max_overrides = dict(z_max_overrides or {})
     z_max_errors = []
     for class_key, z_max in z_max_overrides.items():
+        # Fase 95: el mensaje se arma aca, en ingles (se muestra en la webapp),
+        # y no en run_simsed_poc.py: ese archivo es parte de CODE_FILES y
+        # cambiar su texto cambiaria el code_hash (y todos los run_hash).
         try:
             resolve_effective_class_config(class_key, z_max)
-        except (KeyError, ValueError) as e:
-            z_max_errors.append(str(e))
+        except KeyError:
+            z_max_errors.append(f"'{class_key}': not a class of the catalog")
+        except ValueError:
+            z_min = CLASS_CONFIGS[class_key]["genrange_redshift"][0]
+            z_max_errors.append(f"'{class_key}': z_max={z_max} must be greater than the nominal "
+                                f"z_min ({z_min}), which cannot be overridden")
     if z_max_errors:
-        raise ValueError("z_max_overrides invalidos:\n  - " + "\n  - ".join(z_max_errors))
+        raise ValueError("Invalid z_max overrides:\n  - " + "\n  - ".join(z_max_errors))
 
     if keep_phot:
         print("  ! ADVERTENCIA: keep_phot=true preserva phot_df.parquet de cada corrida (no se "

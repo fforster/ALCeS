@@ -62,7 +62,7 @@ def publish_dataset(sweep_names: list[str], triggered_by: str = "cli") -> Path:
         code_hash_by_sweep[sweep_name] = code_hash_value
 
     if not frames or all(f.empty for f in frames):
-        raise ValueError("ninguna corrida con status=done en los sweeps dados -- nada que publicar")
+        raise ValueError("No run with status=done in the given sweeps -- nothing to publish.")
 
     consolidated = pd.concat(frames, ignore_index=True)
     run_hashes_full = sorted(consolidated["run_hash_full"].tolist())

@@ -43,6 +43,7 @@ import pandas as pd
 
 import sweep_aggregate
 import sweep_compile
+import sweep_explore
 import sweep_generate
 import sweep_hash as sh
 import sweep_history
@@ -147,7 +148,7 @@ def generate():
     try:
         seeds = [int(s.strip()) for s in form.get("seeds", "0").split(",") if s.strip()]
     except ValueError:
-        flash("semillas invalidas -- deben ser numeros separados por coma (p.ej. '0,1,2')")
+        flash("Invalid seeds -- use comma-separated integers (e.g. '0,1,2').")
         return redirect(url_for("index"))
 
     ngentot_overrides = {}
@@ -157,7 +158,7 @@ def generate():
             try:
                 ngentot_overrides[class_key] = int(raw)
             except ValueError:
-                flash(f"ngentot invalido para '{class_key}': '{raw}'")
+                flash(f"Invalid ngentot for '{class_key}': '{raw}'")
                 return redirect(url_for("index"))
 
     # Fase 93: override de z_max por clase -- z_min queda siempre en el
@@ -175,7 +176,7 @@ def generate():
             try:
                 z_max_overrides[class_key] = float(raw)
             except ValueError:
-                flash(f"z_max invalido para '{class_key}': '{raw}'")
+                flash(f"Invalid z_max for '{class_key}': '{raw}'")
                 return redirect(url_for("index"))
 
     # DDF y WFD son casillas independientes -- marcar las dos genera un
@@ -188,7 +189,7 @@ def generate():
     if "mode_wfd" in form:
         modes.append({"wfd": True, "simsed_t0_mode": "bolometric_peak"})
     if not modes:
-        flash("elegir al menos una estrategia -- DDF, WFD, o ambas")
+        flash("Choose at least one strategy -- DDF, WFD or both.")
         return redirect(url_for("index"))
 
     # Fase 84: seccion "avanzado" del formulario -- mismos campos y mismos
@@ -199,7 +200,7 @@ def generate():
         cpus = int(form.get("cpus") or 2)
         max_conc = int(form.get("max_concurrent") or 2)
     except ValueError:
-        flash("valores de 'CPUs' o 'Máx. en paralelo' invalidos -- deben ser numeros enteros")
+        flash("Invalid 'CPUs' or 'Max. in parallel' -- they must be integers.")
         return redirect(url_for("index"))
     resources = {
         "default": {"mem": form.get("mem") or "8G", "time": form.get("time") or "00:15:00", "cpus": cpus},
@@ -243,9 +244,9 @@ def generate():
     })
     if over_threshold:
         flash(
-            f"ATENCION: ngentot supera el umbral historico del proyecto "
-            f"({sweep_compile.NGENTOT_WARN_THRESHOLD}) para: {', '.join(over_threshold)} -- "
-            f"confirmar que es intencional antes de apretar 'Lanzar'."
+            f"WARNING: ngentot exceeds the project's historical threshold "
+            f"({sweep_compile.NGENTOT_WARN_THRESHOLD}) for: {', '.join(over_threshold)} -- "
+            f"make sure this is intentional before pressing 'Launch'."
         )
 
     # Fase 93: aviso de transparencia -- mismo espiritu que el de ngentot
@@ -256,7 +257,7 @@ def generate():
     })
     if overridden_zmax:
         detail = ", ".join(f"{c} (z_max={z_max_overrides[c]})" for c in overridden_zmax)
-        flash(f"z_max override aplicado para: {detail}")
+        flash(f"z_max override applied to: {detail}")
 
     return redirect(url_for("sweep_status", name=form.get("sweep_name")))
 
@@ -265,7 +266,7 @@ def generate():
 def sweep_status(name):
     manifest_path = SWEEP_RUNS_DIR / name / "manifest.json"
     if not manifest_path.exists():
-        flash(f"'{name}' no tiene manifiesto compilado todavia")
+        flash(f"'{name}' has no compiled manifest yet")
         return redirect(url_for("index"))
     yaml_path = sweep_generate.SWEEPS_DIR / f"{name}.yaml"
     rows = sweep_monitor.monitor_sweep(name)
@@ -315,9 +316,9 @@ def sweep_run(name):
         # bloquee mientras tanto.
         rc = sweep_launch.launch_sweep(yaml_path, triggered_by="webapp")
         if rc != 0:
-            flash(f"'{name}': fallo al someter alguno de los arrays a SLURM -- revisar salida del servidor")
+            flash(f"'{name}': submitting one of the arrays to SLURM failed -- check the server output")
         else:
-            flash(f"'{name}' sometido a SLURM (sbatch) -- el estado se actualiza abajo")
+            flash(f"'{name}' submitted to SLURM (sbatch) -- the status below updates by itself")
         return redirect(url_for("sweep_status", name=name))
 
     # Sin SLURM (p.ej. la maquina local del profesor, sin cluster -- ver
@@ -336,12 +337,12 @@ def sweep_run(name):
     with RUNNING_LOCK:
         existing = RUNNING.get(name)
         if existing is not None and existing.is_alive():
-            flash(f"'{name}' ya esta corriendo -- no se lanza dos veces en paralelo")
+            flash(f"'{name}' is already running -- not launching it twice in parallel")
             return redirect(url_for("sweep_status", name=name))
         thread = threading.Thread(target=_run, daemon=True)
         RUNNING[name] = thread
         thread.start()
-    flash(f"'{name}' lanzado en segundo plano (sin SLURM en esta maquina) -- el estado se actualiza abajo")
+    flash(f"'{name}' launched in the background (no SLURM on this machine) -- the status below updates by itself")
     return redirect(url_for("sweep_status", name=name))
 
 
@@ -352,7 +353,7 @@ def sweep_status_json(name):
     # (JSON) en vez de dejar reventar monitor_sweep con un 500 -- el
     # polling del front (sweep_status.html) ya corta solo en `!res.ok`.
     if not (SWEEP_RUNS_DIR / name / "manifest.json").exists():
-        return jsonify(error=f"'{name}' no tiene manifiesto compilado todavia"), 404
+        return jsonify(error=f"'{name}' has no compiled manifest yet"), 404
     rows = sweep_monitor.monitor_sweep(name)
     for r in rows:
         run_dir = SWEEP_RUNS_DIR / name / "runs" / r["run_hash"]
@@ -368,7 +369,7 @@ def sweep_panel_json(name):
     el JS de sweep_status.html lo pide solo cuando cambia el numero de
     corridas 'done', no en cada tick de 3s (ver pollOnce())."""
     if not (SWEEP_RUNS_DIR / name / "manifest.json").exists():
-        return jsonify(error=f"'{name}' no tiene manifiesto compilado todavia"), 404
+        return jsonify(error=f"'{name}' has no compiled manifest yet"), 404
     return jsonify(sweep_aggregate.build_live_panel(name))
 
 
@@ -382,7 +383,7 @@ def run_summary(name, run_hash):
     run_dir = SWEEP_RUNS_DIR / name / "runs" / run_hash
     summary_path = run_dir / "summary.json"
     if not summary_path.exists():
-        flash(f"'{run_hash}' todavia no tiene summary.json -- la corrida no ha terminado")
+        flash(f"'{run_hash}' has no summary.json yet -- the run has not finished")
         return redirect(url_for("sweep_status", name=name))
     summary = sh.read_json(summary_path)
     files = sorted(p.name for p in run_dir.iterdir() if p.is_file())
@@ -392,10 +393,49 @@ def run_summary(name, run_hash):
     )
 
 
+@app.route("/sweep/<safe:name>/explore")
+def sweep_explore_page(name):
+    """Fase 95: "Explore" -- notebook de analisis del sweep, ejecutado en el
+    servidor y mostrado celda por celda (sweep_explore.py). El estado vive
+    en disco (explore/status.json), igual que run_hash.json para las
+    corridas; la pagina solo lo consulta via /explore/state."""
+    if not (SWEEP_RUNS_DIR / name / "manifest.json").exists():
+        flash(f"'{name}' has no compiled manifest yet")
+        return redirect(url_for("sweeps_list"))
+    return render_template("explore.html", name=name,
+                           notebook_rel=str(sweep_explore.notebook_path(name, SWEEP_RUNS_DIR)))
+
+
+@app.route("/sweep/<safe:name>/explore/run", methods=["POST"])
+def sweep_explore_run(name):
+    if not (SWEEP_RUNS_DIR / name / "manifest.json").exists():
+        flash(f"'{name}' has no compiled manifest yet")
+        return redirect(url_for("sweeps_list"))
+    if not sweep_explore.start(name, SWEEP_RUNS_DIR):
+        flash(f"The exploration of '{name}' is already running")
+    return redirect(url_for("sweep_explore_page", name=name))
+
+
+@app.route("/sweep/<safe:name>/explore/state")
+def sweep_explore_state(name):
+    if not (SWEEP_RUNS_DIR / name / "manifest.json").exists():
+        return jsonify(error=f"'{name}' has no compiled manifest yet"), 404
+    return jsonify(sweep_explore.state(name, SWEEP_RUNS_DIR))
+
+
+@app.route("/sweep/<safe:name>/explore/notebook.ipynb")
+def sweep_explore_notebook(name):
+    nb_path = sweep_explore.notebook_path(name, SWEEP_RUNS_DIR)
+    if not nb_path.exists():
+        return jsonify(error=f"'{name}' has not been explored yet"), 404
+    return send_from_directory(nb_path.parent, nb_path.name, as_attachment=True,
+                               mimetype="application/x-ipynb+json")
+
+
 @app.route("/sweep/<safe:name>/aggregate", methods=["POST"])
 def sweep_aggregate_route(name):
     sweep_aggregate.aggregate_sweep(name)
-    flash(f"'{name}' agregado")
+    flash(f"'{name}' aggregated")
     return redirect(url_for("sweep_status", name=name))
 
 
@@ -429,7 +469,7 @@ def dataset_view(dataset_hash):
     import sweep_hash as sh
     manifest_path = DATASETS_DIR / dataset_hash / "manifest.json"
     if not manifest_path.exists():
-        flash(f"dataset '{dataset_hash}' no existe")
+        flash(f"dataset '{dataset_hash}' does not exist")
         return redirect(url_for("index"))
     manifest = sh.read_json(manifest_path)
     by_class_shapes = {}
@@ -439,5 +479,34 @@ def dataset_view(dataset_hash):
     return render_template("dataset.html", manifest=manifest, by_class_shapes=by_class_shapes)
 
 
+def main(argv: list[str] | None = None) -> None:
+    """Fase 96: `--socket RUTA` sirve la app en un socket Unix (lo usa
+    webapp/serve_nlhpc.sh en NLHPC) en vez de 127.0.0.1:<puerto>. En un
+    login node compartido el loopback es de TODOS los usuarios del nodo:
+    cualquiera podia abrir 127.0.0.1:5000 y lanzar sweeps con la cuenta de
+    quien corria la app. Un socket dentro de ~/.alces (700) solo lo abre su
+    duenho, y el tunel ssh -L <puerto>:<socket> no depende del puerto libre
+    del nodo. Sin --socket, igual que siempre (maquina local del profesor)."""
+    import argparse
+    import os
+    from werkzeug.serving import run_simple
+
+    parser = argparse.ArgumentParser(description="LightCurveLynx sweep webapp")
+    parser.add_argument("--socket", help="serve on this Unix socket instead of 127.0.0.1:<port>")
+    parser.add_argument("--port", type=int, default=5000)
+    args = parser.parse_args(argv)
+    if args.socket:
+        sock = Path(args.socket)
+        # Proteccion: el directorio del socket (serve_nlhpc.sh lo crea 700).
+        # No se toca el umask: afectaria a todo el proceso (sweeps generados).
+        if not (os.stat(sock.parent).st_mode & 0o077) == 0:
+            parser.error(f"{sock.parent} must be private (chmod 700)")
+        if sock.is_socket():
+            sock.unlink()  # restos de una sesion anterior que no alcanzo a limpiar
+        run_simple(f"unix://{sock}", 0, app, threaded=True)
+    else:
+        app.run(host="127.0.0.1", port=args.port, debug=False)
+
+
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    main()

@@ -2,58 +2,55 @@
 {% block content %}
 <form method="post" action="{{ url_for('generate') }}">
   <div class="field-row">
-    <label>Nombre del sweep: <input type="text" name="sweep_name" required pattern="[A-Za-z0-9_-]{1,64}" placeholder="p.ej. training_set_v1"></label>
+    <label>Sweep name: <input type="text" name="sweep_name" required pattern="[A-Za-z0-9_-]{1,64}" placeholder="e.g. training_set_v1"></label>
   </div>
   <div class="field-row">
-    <label>Descripción: <input type="text" name="description" size="60" placeholder="opcional"></label>
+    <label>Description: <input type="text" name="description" size="60" placeholder="optional"></label>
   </div>
-
   <fieldset>
-    <legend>Clases disponibles (vendorizadas en esta máquina)</legend>
+    <legend>Available classes (vendored on this machine)</legend>
     {% if classes %}
       {% for c in classes %}
         <div class="class-row">
           <label><input type="checkbox" name="classes" value="{{ c }}"> {{ c }}</label>
-          <label>ngentot: <input type="number" name="ngentot_{{ c }}" placeholder="default del catálogo" min="1" style="width:9rem"></label>
+          <label>ngentot: <input type="number" name="ngentot_{{ c }}" placeholder="catalog default" min="1" style="width:9rem"></label>
           <label>z_max: <input type="number" step="any" name="z_max_{{ c }}"
               placeholder="nominal: {{ '%.3f'|format(z_ranges[c][1]) }}" style="width:9rem"></label>
-          <span class="hint">z_min fijo en {{ '%.3f'|format(z_ranges[c][0]) }} (no overrideable)</span>
+          <span class="hint">z_min fixed at {{ '%.3f'|format(z_ranges[c][0]) }} (cannot be overridden)</span>
         </div>
       {% endfor %}
     {% else %}
-      <p class="hint">No hay clases vendorizadas en esta máquina todavía — ver <code>HOWTO_LOCAL.md</code>
-      secciones 4 y 8 (<code>vendor_snana_class.py &lt;clase&gt;</code> en NLHPC).</p>
+      <p class="hint">No classes are vendored on this machine yet — see <code>HOWTO_LOCAL.md</code>
+      sections 4 and 8 (<code>vendor_snana_class.py &lt;class&gt;</code> on NLHPC).</p>
     {% endif %}
   </fieldset>
-
   <div class="field-row">
-    <label>Semillas (separadas por coma): <input type="text" name="seeds" value="0"></label>
+    <label>Seeds (comma-separated): <input type="text" name="seeds" value="0"></label>
   </div>
   <div class="field-row">
-    <label><input type="checkbox" name="mode_ddf" checked> DDF (campos fijos)</label>
-    <label><input type="checkbox" name="mode_wfd"> WFD (footprint completo)</label>
-    <div class="hint">Marcar las dos genera corridas para ambas estrategias dentro del mismo
-    sweep (un <code>mode</code> por cada una, ver <code>sweep_compile.py::build_runs()</code>) —
-    no hace falta generar 2 sweeps separados.</div>
+    <label><input type="checkbox" name="mode_ddf" checked> DDF (fixed fields)</label>
+    <label><input type="checkbox" name="mode_wfd"> WFD (full footprint)</label>
+    <div class="hint">Checking both creates runs for both strategies within the same sweep (one
+    <code>mode</code> each, see <code>sweep_compile.py::build_runs()</code>) — no need to generate
+    two separate sweeps.</div>
   </div>
   <div class="field-row">
-    <label><input type="checkbox" name="keep_phot"> Preservar fotometría cruda</label>
-    <div class="hint">Necesario para exportar por clase al equipo de ML (Fase 81/82) — usa más
-    espacio de disco, verificar headroom antes de un barrido grande.</div>
+    <label><input type="checkbox" name="keep_phot"> Keep raw photometry</label>
+    <div class="hint">Needed to export per-class data for the ML team and to explore
+    observation-level data and light curves in <strong>Explore</strong>. Uses more disk space —
+    check the available headroom before a large sweep.</div>
   </div>
-
   <details>
-    <summary>Avanzado (recursos por corrida)</summary>
+    <summary>Advanced (resources per run)</summary>
     <div class="field-row">
-      <label>Memoria: <input type="text" name="mem" value="8G" style="width:5rem"></label>
-      <label>Tiempo (sbatch): <input type="text" name="time" value="00:15:00" style="width:7rem"></label>
+      <label>Memory: <input type="text" name="mem" value="8G" style="width:5rem"></label>
+      <label>Time (sbatch): <input type="text" name="time" value="00:15:00" style="width:7rem"></label>
       <label>CPUs: <input type="number" name="cpus" value="2" min="1" style="width:4rem"></label>
-      <label>Máx. en paralelo: <input type="number" name="max_concurrent" value="2" min="1" style="width:4rem"></label>
+      <label>Max. in parallel: <input type="number" name="max_concurrent" value="2" min="1" style="width:4rem"></label>
     </div>
-    <p class="hint">Mismo significado que en un YAML escrito a mano (ver <code>HOWTO.md</code>) —
-    defaults razonables para una corrida chica de prueba, no para un barrido grande real.</p>
+    <p class="hint">Same meaning as in a hand-written YAML (see <code>HOWTO.md</code>) — sensible
+    defaults for a small test run, not for a large production sweep.</p>
   </details>
-
-  <button type="submit">Generar</button>
+  <button type="submit">Generate</button>
 </form>
 {% endblock %}

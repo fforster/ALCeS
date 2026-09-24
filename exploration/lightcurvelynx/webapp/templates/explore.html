@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Explore {{ name }} — LightCurveLynx{% endblock %}
+{% block heading %}Explore: {{ name }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('sweep_status', name=name) }}">← back to the sweep</a></p>
+
+<p class="hint">Runs an analysis notebook over the finished runs of this sweep (inventory, detection
+efficiency, redshift and NOBS distributions, efficiency vs. redshift, raw photometry and example
+light curves when available, DDF vs. WFD). It runs on the server that hosts this app and the cells
+appear below as they execute. The executed notebook is saved to
+<code>{{ notebook_rel }}</code>; download it to keep exploring in JupyterLab.</p>
+
+<div id="explore-controls">
+  <form method="post" action="{{ url_for('sweep_explore_run', name=name) }}" style="display:inline">
+    <button type="submit" id="run-btn">Run exploration</button>
+  </form>
+  <a id="download-link" href="{{ url_for('sweep_explore_notebook', name=name) }}" style="display:none">Download .ipynb</a>
+</div>
+<p><span id="explore-status" class="hint"></span></p>
+<div class="progress" id="progress" style="display:none"><div id="progress-bar"></div></div>
+
+<div id="cells"></div>
+
+<script>
+// Fase 95: polling de /explore/state (sweep_explore.state: status.json +
+// celdas ya renderizadas a HTML por el servidor) -- mismo patron que el
+// pollLoop de sweep_status.html. Se detiene cuando el estado deja de ser
+// "running".
+const SWEEP_NAME = {{ name | tojson }};
+const STATE_URL = {{ url_for('sweep_explore_state', name=name) | tojson }};
+
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function cellHtml(cell, st) {
+  const running = st.state === "running";
+  let cls = "nb-cell";
+  if (running && cell.index === st.current_cell) cls += " running";
+  else if (running && cell.index > st.current_cell) cls += " pending";
+  if (cell.has_error) cls += " errored";
+  if (cell.type === "markdown") return `<div class="${cls}">${cell.html}</div>`;
+  const prompt = cell.execution_count ? `[${cell.execution_count}]`
+               : (running && cell.index === st.current_cell ? "[*]" : "[ ]");
+  return `<div class="${cls}"><div class="nb-prompt">In ${prompt}</div>` +
+         `<pre class="nb-source">${escapeHtml(cell.source)}</pre>` +
+         `<div class="nb-outputs">${cell.outputs_html || ""}</div></div>`;
+}
+
+let lastRendered = "";
+
+function render(st) {
+  const status = document.getElementById("explore-status");
+  const btn = document.getElementById("run-btn");
+  const progress = document.getElementById("progress");
+  const bar = document.getElementById("progress-bar");
+  const total = st.n_cells || st.cells.length || 0;
+  if (st.state === "never_run") {
+    status.textContent = "This sweep has not been explored yet — press “Run exploration”.";
+  } else if (st.state === "running") {
+    status.textContent = `Running cell ${Math.min(st.current_cell + 1, total)} of ${total}… (started ${st.started_at})`;
+  } else if (st.state === "done") {
+    const nErr = st.cells.filter(c => c.has_error).length;
+    status.textContent = `Finished ${st.finished_at}` + (nErr ? ` — ${nErr} cell(s) with errors` : "") + ".";
+  } else if (st.state === "interrupted") {
+    status.textContent = "The previous exploration was interrupted (the server restarted while it ran) — run it again.";
+  } else if (st.state === "failed") {
+    status.textContent = `Failed ${st.finished_at || ""}: ${st.error || "unknown error"}`;
+  }
+  btn.disabled = st.state === "running";
+  btn.textContent = st.state === "never_run" ? "Run exploration" : "Re-run exploration";
+  document.getElementById("download-link").style.display =
+    ["done", "failed", "interrupted"].includes(st.state) ? "" : "none";
+  progress.style.display = st.state === "running" ? "" : "none";
+  bar.style.width = total ? `${100 * st.current_cell / total}%` : "0";
+
+  // Solo re-dibujar si cambio algo (evita parpadeo de imagenes en cada tick)
+  const html = st.cells.map(c => cellHtml(c, st)).join("");
+  if (html !== lastRendered) {
+    document.getElementById("cells").innerHTML = html;
+    lastRendered = html;
+  }
+}
+
+async function pollOnce() {
+  const res = await fetch(STATE_URL);
+  if (!res.ok) {
+    document.getElementById("explore-status").textContent = "Could not read the exploration state from the server.";
+    return true;
+  }
+  const st = await res.json();
+  render(st);
+  return st.state !== "running";
+}
+
+(async function pollLoop() {
+  let done = await pollOnce();
+  while (!done) {
+    await new Promise(r => setTimeout(r, 1500));
+    done = await pollOnce();
+  }
+})();
+</script>
+{% endblock %}

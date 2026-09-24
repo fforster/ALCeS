@@ -1,18 +1,19 @@
 {% extends "base.html" %}
-{% block heading %}Resultados: {{ name }} / {{ run_hash }}{% endblock %}
+{% block heading %}Results: {{ name }} / {{ run_hash }}{% endblock %}
 {% block content %}
-<p><a href="{{ url_for('sweep_status', name=name) }}">← volver al sweep</a></p>
+<p><a href="{{ url_for('sweep_status', name=name) }}">← back to the sweep</a>
+ · <a href="{{ url_for('sweep_explore_page', name=name) }}">Explore the whole sweep</a></p>
 
-<p><strong>Archivos reales en disco</strong> (en la máquina donde corre esta app):</p>
+<p><strong>Files on disk</strong> (on the machine running this app):</p>
 <pre>{{ run_dir }}/
 {% for f in files %}  {{ f }}
 {% endfor %}</pre>
-<p class="hint">Estos archivos no se sirven por la web salvo los <code>.png</code> de QC —
-para copiarlos a otro lado (por ejemplo, para el equipo de ML) usar <code>scp</code>/<code>rsync</code>
-desde una terminal apuntando a esa ruta, o publicar el sweep completo (botón "Publicar") para
-consolidarlo en <code>datasets/&lt;hash&gt;/</code>.</p>
+<p class="hint">These files are not served over the web except the QC <code>.png</code> images —
+to copy them elsewhere (for example, for the ML team) use <code>scp</code>/<code>rsync</code> from a
+terminal pointing at that path, or publish the whole sweep (the "Publish" button) to consolidate it
+into <code>datasets/&lt;hash&gt;/</code>.</p>
 
-<h3>summary.json (métricas reales de esta corrida)</h3>
+<h3>summary.json (metrics of this run)</h3>
 <table>
   <tbody>
     {% for k, v in summary.items() %}

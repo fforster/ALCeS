@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block heading %}Historial reproducible{% endblock %}
+{% block heading %}Reproducible history{% endblock %}
 {% block content %}
-<p class="hint">Cada evento de decisión (generar/compilar/correr/publicar), más reciente primero —
-<code>generation_history.jsonl</code>, ver NOTES.md Fase 80.</p>
+<p class="hint">Every decision event (generate/compile/run/publish), most recent first —
+<code>generation_history.jsonl</code>, see NOTES.md Fase 80.</p>
 <table>
-  <thead><tr><th>Timestamp</th><th>Evento</th><th>Sweep</th><th>Vía</th><th>Detalle</th></tr></thead>
+  <thead><tr><th>Timestamp</th><th>Event</th><th>Sweep</th><th>Via</th><th>Detail</th></tr></thead>
   <tbody>
     {% for e in events %}
     <tr>
@@ -17,15 +17,15 @@
       </td>
       <td>{{ e.triggered_by }}</td>
       <td>
-        {% if e.event_type == 'generate_sweep' %}{{ e.classes }} × semillas {{ e.seeds }}{% endif %}
-        {% if e.event_type == 'compile_sweep' %}{{ e.n_runs }} corrida(s){% endif %}
-        {% if e.event_type == 'launch_sweep' %}{{ e.n_ok }}/{{ e.n_arrays }} array(s) sometidos a SLURM ({{ e.slurm_job_ids | join(", ") }}){% endif %}
-        {% if e.event_type == 'run_local' %}{{ e.n_ok }} ok / {{ e.n_fail }} fallo(s) (sin SLURM){% endif %}
-        {% if e.event_type == 'publish_dataset' %}<a href="{{ url_for('dataset_view', dataset_hash=e.dataset_hash) }}">{{ e.dataset_hash }}</a> ({{ e.ingestion_format or 'sin formato por clase' }}){% endif %}
+        {% if e.event_type == 'generate_sweep' %}{{ e.classes }} × seeds {{ e.seeds }}{% endif %}
+        {% if e.event_type == 'compile_sweep' %}{{ e.n_runs }} run(s){% endif %}
+        {% if e.event_type == 'launch_sweep' %}{{ e.n_ok }}/{{ e.n_arrays }} array(s) submitted to SLURM ({{ e.slurm_job_ids | join(", ") }}){% endif %}
+        {% if e.event_type == 'run_local' %}{{ e.n_ok }} ok / {{ e.n_fail }} failure(s) (no SLURM){% endif %}
+        {% if e.event_type == 'publish_dataset' %}<a href="{{ url_for('dataset_view', dataset_hash=e.dataset_hash) }}">{{ e.dataset_hash }}</a> ({{ e.ingestion_format or 'no per-class format' }}){% endif %}
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="5" class="hint">Sin eventos todavía — generar un sweep desde <a href="{{ url_for('index') }}">acá</a>.</td></tr>
+    <tr><td colspan="5" class="hint">No events yet — generate a sweep <a href="{{ url_for('index') }}">here</a>.</td></tr>
     {% endfor %}
   </tbody>
 </table>

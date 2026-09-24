@@ -3,45 +3,50 @@
 {% block content %}
 <p id="run-controls">
   {% if launched or running %}
-    <strong id="running-label">{{ "corriendo…" if running else "sometido -- el estado se actualiza solo abajo" }}</strong>
-    <span class="hint">(el estado se actualiza solo abajo)</span>
+    <strong id="running-label">{{ "running…" if running else "submitted" }}</strong>
+    <span class="hint">(the status below updates by itself)</span>
   {% else %}
     <form method="post" action="{{ url_for('sweep_run', name=name) }}" style="display:inline">
       {% if not slurm %}
       <label>workers: <input type="number" name="workers" min="1" style="width:4rem" placeholder="auto"></label>
       {% endif %}
-      <button type="submit">Lanzar</button>
+      <button type="submit">Launch</button>
     </form>
     <span class="hint">
-      {% if slurm %}se somete a SLURM real (<code>sbatch</code>) -- el cómputo corre en nodos de cómputo, nunca en este servidor.
-      {% else %}sin SLURM en esta máquina -- corre en un hilo de fondo de este mismo proceso (ver <code>HOWTO_LOCAL.md</code>).{% endif %}
+      {% if slurm %}submitted to SLURM (<code>sbatch</code>) -- the computation runs on compute nodes, never on this server.
+      {% else %}no SLURM on this machine -- runs in a background thread of this same process (see <code>HOWTO_LOCAL.md</code>).{% endif %}
     </span>
   {% endif %}
 </p>
 <p id="agg-pub-actions" {% if not all_done %}style="display:none"{% endif %}>
   <form method="post" action="{{ url_for('sweep_aggregate_route', name=name) }}" style="display:inline">
-    <button type="submit">Agregar</button>
+    <button type="submit">Aggregate</button>
   </form>
   <form method="post" action="{{ url_for('sweep_publish_route', name=name) }}" style="display:inline">
-    <button type="submit">Publicar</button>
+    <button type="submit">Publish</button>
   </form>
 </p>
-{% if aggregated %}<p class="hint">Ya agregado (<code>aggregated_summary.parquet</code> existe).</p>{% endif %}
+{% if aggregated %}<p class="hint">Already aggregated (<code>aggregated_summary.parquet</code> exists).</p>{% endif %}
 
-<p class="hint"><strong>Dónde quedan los resultados:</strong> cada corrida escribe sus archivos
-reales en <code>{{ sweep_dir }}/runs/&lt;run_hash&gt;/</code> (en la máquina donde corre esta app)
-— <code>head_df.parquet</code>, <code>phot_df.parquet</code> (solo si esta corrida tenía
-<code>keep_phot=true</code>), <code>summary.json</code>, y las imágenes de <code>qc/</code> que se
-ven abajo. Click en "resumen" por fila para ver las métricas reales y la ruta completa.</p>
+<p id="explore-link" {% if not rows|selectattr("status", "equalto", "done")|list %}style="display:none"{% endif %}>
+  <a href="{{ url_for('sweep_explore_page', name=name) }}"><strong>Explore results →</strong></a>
+  <span class="hint">run an analysis notebook over the finished runs and watch it execute cell by cell.</span>
+</p>
 
-<p class="hint"><strong>z máximo simulado en este sweep</strong> (entre las corridas ya terminadas):
+<p class="hint"><strong>Where the results are:</strong> each run writes its files to
+<code>{{ sweep_dir }}/runs/&lt;run_hash&gt;/</code> (on the machine running this app)
+— <code>head_df.parquet</code>, <code>phot_df.parquet</code> (only if the run had
+<code>keep_phot=true</code>), <code>summary.json</code>, and the <code>qc/</code> images shown
+below. Click "summary" on a row to see its metrics and the full path.</p>
+
+<p class="hint"><strong>Maximum simulated z in this sweep</strong> (among finished runs):
 {% if zmax %}<code>{{ "%.3f"|format(zmax.z_max_simulado) }}</code>
-({{ zmax.class_key }}, corrida <code>{{ zmax.run_hash }}</code>){% if zmax.z_max_detectado %} --
-z máximo detectado: <code>{{ "%.3f"|format(zmax.z_max_detectado) }}</code>{% endif %}
-{% else %}— (todavía sin corridas terminadas con este dato){% endif %}</p>
+({{ zmax.class_key }}, run <code>{{ zmax.run_hash }}</code>){% if zmax.z_max_detectado %} --
+maximum detected z: <code>{{ "%.3f"|format(zmax.z_max_detectado) }}</code>{% endif %}
+{% else %}— (no finished runs with this field yet){% endif %}</p>
 
 <table id="status-table">
-  <thead><tr><th>Idx</th><th>run_hash</th><th>Clase</th><th>Estrategia</th><th>Semilla</th><th>Estado</th><th>Detalle</th><th>QC</th><th>Resultados</th></tr></thead>
+  <thead><tr><th>Idx</th><th>run_hash</th><th>Class</th><th>Strategy</th><th>Seed</th><th>Status</th><th>Detail</th><th>QC</th><th>Results</th></tr></thead>
   <tbody>
     {% for r in rows %}
     <tr data-index="{{ r.index }}">
@@ -60,7 +65,7 @@ z máximo detectado: <code>{{ "%.3f"|format(zmax.z_max_detectado) }}</code>{% en
         {% endfor %}
       </td>
       <td class="summary-cell">
-        {% if r.has_summary %}<a href="{{ url_for('run_summary', name=name, run_hash=r.run_hash) }}">resumen</a>{% endif %}
+        {% if r.has_summary %}<a href="{{ url_for('run_summary', name=name, run_hash=r.run_hash) }}">summary</a>{% endif %}
       </td>
     </tr>
     {% endfor %}
@@ -70,7 +75,7 @@ z máximo detectado: <code>{{ "%.3f"|format(zmax.z_max_detectado) }}</code>{% en
 
 <div id="live-panel"></div>
 
-<h3>YAML generado</h3>
+<h3>Generated YAML</h3>
 <pre>{{ yaml_text }}</pre>
 
 <script>
@@ -111,8 +116,8 @@ function qcLinksHtml(row) {
 let lastNDone = -1;
 
 function effTableHtml(rows) {
-  if (!rows.length) return "<p class=\"hint\">Sin corridas terminadas todavia.</p>";
-  const head = "<tr><th>Clase</th><th>Estrategia</th><th>Eficiencia</th><th>SNR mediano</th></tr>";
+  if (!rows.length) return "<p class=\"hint\">No finished runs yet.</p>";
+  const head = "<tr><th>Class</th><th>Strategy</th><th>Efficiency</th><th>Median SNR</th></tr>";
   const body = rows.map(r => {
     const pct = (r.detection_efficiency_pct || 0).toFixed(1);
     return `<tr><td>${r.class_key}</td><td>${r.strategy}</td>` +
@@ -133,7 +138,7 @@ function histTableHtml(hist, label) {
 
 function pivotTableHtml(rows) {
   if (!rows.length) return "";
-  const head = "<tr><th>Clase</th><th>Estrategia</th><th>Eficiencia %</th><th>SNR mediano</th><th>SNR p90</th></tr>";
+  const head = "<tr><th>Class</th><th>Strategy</th><th>Efficiency %</th><th>Median SNR</th><th>SNR p90</th></tr>";
   const body = rows.map(r =>
     `<tr><td>${r.class_key}</td><td>${r.strategy}</td><td>${(r.detection_efficiency_pct || 0).toFixed(1)}</td>` +
     `<td>${(r.snr_median || 0).toFixed(1)}</td><td>${(r.snr_p90 || 0).toFixed(1)}</td></tr>`
@@ -146,7 +151,7 @@ async function refreshLivePanel() {
   const res = await fetch(`/sweep/${SWEEP_NAME}/panel`);
   if (!res.ok) return;
   const data = await res.json();
-  panel.innerHTML = "<h3>Vista agregada del sweep (corridas terminadas)</h3>" +
+  panel.innerHTML = "<h3>Aggregated view of the sweep (finished runs)</h3>" +
     effTableHtml(data.efficiency_rows || []) +
     histTableHtml(data.z_hist, "Redshift (REDSHIFT_HELIO)") +
     histTableHtml(data.nobs_hist, "NOBS") +
@@ -171,13 +176,16 @@ async function pollOnce() {
     tr.querySelector(".qc-cell").innerHTML = qcLinksHtml(row);
     if (row.has_summary) {
       tr.querySelector(".summary-cell").innerHTML =
-        `<a href="/sweep/${SWEEP_NAME}/run/${row.run_hash}/summary">resumen</a>`;
+        `<a href="/sweep/${SWEEP_NAME}/run/${row.run_hash}/summary">summary</a>`;
     }
     if (!TERMINAL.has(row.status)) allTerminal = false;
     if (row.status !== "done") allDone = false;
   }
   if (allDone) {
     document.getElementById("agg-pub-actions").style.display = "";
+  }
+  if (nDone > 0) {
+    document.getElementById("explore-link").style.display = "";
   }
   // Fase 91: el panel agregado solo se recalcula cuando cambia el conteo
   // de corridas "done" -- no en cada tick de 3s.
@@ -196,12 +204,12 @@ async function pollOnce() {
   // sweep que ya termino hace rato.
   let done = await pollOnce();
   while (!done) {
-    hint.textContent = "actualizando estado cada 3s…";
+    hint.textContent = "refreshing the status every 3 s…";
     await new Promise(r => setTimeout(r, 3000));
     done = await pollOnce();
   }
   hint.textContent = "";
-  if (runningLabel) runningLabel.textContent = "terminado -- recargar para relanzar si hace falta";
+  if (runningLabel) runningLabel.textContent = "finished -- reload the page to launch again if needed";
 })();
 </script>
 {% endblock %}
