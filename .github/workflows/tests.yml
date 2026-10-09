@@ -1,0 +1,23 @@
+# Tests que no necesitan datos de NLHPC (SED de SNANA, OpSim, SNANA mismo).
+# La regresion dorada de la fisica (tests/golden/) corre aparte en NLHPC.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"  # misma version que el venv de NLHPC
+          cache: pip
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r exploration/lightcurvelynx/requirements.txt "pytest>=8"
+      - name: pytest
+        run: python -m pytest -v -m "not nlhpc"

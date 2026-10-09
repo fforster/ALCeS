@@ -10203,3 +10203,49 @@ login node, para que cualquiera del equipo la pueda correr sin problemas.
 Nuevos: `webapp/open_nlhpc.sh`, `webapp/serve_nlhpc.sh`. Modificados: `webapp/app.py` (`main()`),
 `sweep_explore.py` (apagado del kernel), `test_sweep_explore.py`, `HOWTO_WEBAPP.md` (§3-bis),
 `NOTES.md`.
+
+## Fase 97 -- diagnóstico de la confusión KN-K17 ↔ KN-BULLA19 + red de seguridad (regresión dorada, pytest, CI)
+
+### Contexto
+
+El equipo que entrena los clasificadores (fuera de este repo, etiqueta = `class_key`) reportó que
+confunden KN-K17 con KN-BULLA19 y separan bien el resto. Además el profesor ya investiga con el
+simulador, así que cualquier mejora futura tiene que demostrarse físicamente neutra.
+
+### Diagnóstico KN (`kn_confusion_diag.py`)
+
+- **Nivel A, templates sin observar** (329 K17 + 550 BULLA19, fotometría sintética AB a 10 pc con
+  los passbands locales): kNN leave-one-out separa las dos grillas con accuracy balanceada **1.0**
+  (control K17 vs CaRT: 1.0). El rasgo que más separa es la caída a 7 días (`dm7_r`, AUC 0.12):
+  BULLA19 cae 5-7 mag/semana, K17 2-5.
+- **Nivel B, objetos detectados** (6 semillas por KN, 645 K17 + 855 BULLA19): **0.68**. Por noches
+  distintas con detección: 1 noche 0.57, 2 noches 0.58, 3 noches 0.67, 4-5 noches 0.82, 6+ 0.82.
+  El 55% de las KN detectadas tiene 1-2 noches. Agregar z no ayuda (misma distribución de z en ambas).
+- **Conclusión:** la confusión viene del muestreo de LSST, no de la física ni de un bug. Queda como
+  trabajo futuro del paper (Sec. 9.2), no como resultado.
+- **Hallazgo lateral:** `PEAKMJD` tiene origen distinto por clase (primera detección − PEAKMJD:
+  mediana +0.89 d en BULLA19, −0.03 d en K17), porque BULLA19 declara `OPTFLAG_T0SHIFT_PEAKMAG: 0`.
+- **Cuota de disco:** 14 corridas con `phot_df` completo (~250 MB c/u) llenaron el home.
+  `kn_confusion_shrink.py` deja solo los detectados (2 GB → 86 MB); `kn_confusion_gen.sbatch` lo
+  aplica y limita el array a 3 jobs simultáneos.
+- Dos errores del propio diagnóstico, corregidos antes de concluir: flujo residual ~1e-105 de K17
+  daba M≈+600 (corte en M=−5), y `n_det` contaba exposiciones DDF, no noches (`n_det_nights`).
+
+### Red de seguridad
+
+- **`tests/golden/check_golden.py`**: corre SNIa-91bg, KN-BULLA19, CaRT y TDE-MOSFIT (semilla 7,
+  NGENTOT 300) y compara SHA256 de `head_df`/`phot_df` (solo columnas que existían al grabar) y los
+  conteos de `summary.json`. `--record` y `--check` en nodos distintos de NLHPC: **idéntico bit a
+  bit** (jobs 14959513/14959514). Referencia en `tests/golden/golden_reference.json`. Sirve para
+  probar que un cambio a `CODE_FILES` (que siempre cambia el `code_hash`) no cambia la física.
+- **pytest**: `pytest.ini` + `conftest.py` adaptan los tests-script existentes sin reescribirlos (un
+  `check()` fallido cuenta como FAILED). Local: 11/11.
+- **CI**: `.github/workflows/tests.yml` (Ubuntu, Python 3.12, `requirements.txt` + pytest). No
+  verificado todavía en GitHub.
+
+### Archivos de esta fase
+
+Nuevos: `kn_confusion_diag.py`, `kn_confusion_gen.sbatch`, `kn_confusion_diag.sbatch`,
+`kn_confusion_shrink.py`, `tests/golden/{check_golden.py,run_golden.sbatch,golden_reference.json}`,
+`pytest.ini`, `conftest.py`, `.github/workflows/tests.yml`. Modificados: `.gitignore`, `NOTES.md`.
+`run_simsed_poc.py`, `searcheff.py` y `snana_params.py` no se tocan.

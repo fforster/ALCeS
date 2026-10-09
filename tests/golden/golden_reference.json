@@ -1,0 +1,218 @@
+{
+  "CaRT|seed7|n300": {
+    "head_df": {
+      "column_sums": {
+        "DEC": -6453.627401180671,
+        "DETECTED": 3.0,
+        "NOBS": 2493813.0,
+        "PEAKMJD": 18897477.779979695,
+        "RA": 23130.736310770262,
+        "REDSHIFT_HELIO": 307.17380277567236,
+        "SNTYPE": 26100.0
+      },
+      "columns": [
+        "DEC",
+        "DETECTED",
+        "NOBS",
+        "PEAKMJD",
+        "RA",
+        "REDSHIFT_HELIO",
+        "SNID",
+        "SNTYPE"
+      ],
+      "rows": 300,
+      "sha256": "738fe3a50b4927a76b4e3fef6523d91bf406973415dad1b731c565998c385997"
+    },
+    "phot_df": {
+      "column_sums": {
+        "FLUXCAL": 3429660.388133387,
+        "FLUXCALERR": 1130491107.2790835,
+        "FLUXTRUE": 3494478.7297762553,
+        "MAG": 32164822.096087847,
+        "MJD": 156229128320.76917,
+        "PHOTFLAG": 94208.0
+      },
+      "columns": [
+        "FLT",
+        "FLUXCAL",
+        "FLUXCALERR",
+        "FLUXTRUE",
+        "MAG",
+        "MJD",
+        "PHOTFLAG",
+        "SNID"
+      ],
+      "rows": 2493813,
+      "sha256": "2fda0502c7ac88efff638e9837f15dddc5cdd380c12c943b6ad419a0a7175ad9"
+    },
+    "summary": {
+      "n_detected": 3,
+      "n_total_dump": 300,
+      "n_with_obs": 300,
+      "snr_median": 0.6758643709053128,
+      "snr_p90": 1.6469596420995503
+    }
+  },
+  "KN-BULLA19|seed7|n300": {
+    "head_df": {
+      "column_sums": {
+        "DEC": -6453.627401180671,
+        "DETECTED": 19.0,
+        "NOBS": 1607510.0,
+        "PEAKMJD": 18897477.779979695,
+        "RA": 23130.736310770262,
+        "REDSHIFT_HELIO": 61.98358934701906,
+        "SNTYPE": 15600.0
+      },
+      "columns": [
+        "DEC",
+        "DETECTED",
+        "NOBS",
+        "PEAKMJD",
+        "RA",
+        "REDSHIFT_HELIO",
+        "SNID",
+        "SNTYPE"
+      ],
+      "rows": 300,
+      "sha256": "cf854eed8b4bb88066c8a5dfb2f8b4869eeb8d72a955613c1ab84811d0f192d4"
+    },
+    "phot_df": {
+      "column_sums": {
+        "FLUXCAL": 4271143.533571393,
+        "FLUXCALERR": 724241088.369328,
+        "FLUXTRUE": 3219871.9591017244,
+        "MAG": 20729352.594554033,
+        "MJD": 100490616848.04062,
+        "PHOTFLAG": 913408.0
+      },
+      "columns": [
+        "FLT",
+        "FLUXCAL",
+        "FLUXCALERR",
+        "FLUXTRUE",
+        "MAG",
+        "MJD",
+        "PHOTFLAG",
+        "SNID"
+      ],
+      "rows": 1607510,
+      "sha256": "e4f503bf47055232cc74f0665185847ccb42c96bdb462cfb9e7ede571383b460"
+    },
+    "summary": {
+      "n_detected": 19,
+      "n_total_dump": 300,
+      "n_with_obs": 300,
+      "snr_median": 0.677074273192871,
+      "snr_p90": 1.6499817375244175
+    }
+  },
+  "SNIa-91bg|seed7|n300": {
+    "head_df": {
+      "column_sums": {
+        "DEC": -6453.627401180671,
+        "DETECTED": 125.0,
+        "NOBS": 1633090.0,
+        "PEAKMJD": 18897477.779979695,
+        "RA": 23130.736310770262,
+        "REDSHIFT_HELIO": 133.39400123940862,
+        "SNTYPE": 3900.0
+      },
+      "columns": [
+        "DEC",
+        "DETECTED",
+        "NOBS",
+        "PEAKMJD",
+        "RA",
+        "REDSHIFT_HELIO",
+        "SNID",
+        "SNTYPE"
+      ],
+      "rows": 300,
+      "sha256": "3a40509ee85b8db0a55b9adc5018c1e2f10c8c60f204804b15a09ca400550a17"
+    },
+    "phot_df": {
+      "column_sums": {
+        "FLUXCAL": 108300681.08130291,
+        "FLUXCALERR": 734114744.9528544,
+        "FLUXTRUE": 108155128.88550803,
+        "MAG": 22345764.202677354,
+        "MJD": 102071998930.14343,
+        "PHOTFLAG": 48336896.0
+      },
+      "columns": [
+        "FLT",
+        "FLUXCAL",
+        "FLUXCALERR",
+        "FLUXTRUE",
+        "MAG",
+        "MJD",
+        "PHOTFLAG",
+        "SNID"
+      ],
+      "rows": 1633090,
+      "sha256": "7e556373898213aa434e2f009821560a006a646a876d6e68539c5471095e40f9"
+    },
+    "summary": {
+      "n_detected": 125,
+      "n_total_dump": 300,
+      "n_with_obs": 300,
+      "snr_median": 0.7094211525650591,
+      "snr_p90": 1.7925717231566305
+    }
+  },
+  "TDE-MOSFIT|seed7|n300": {
+    "head_df": {
+      "column_sums": {
+        "DEC": -6453.627401180671,
+        "DETECTED": 150.0,
+        "NOBS": 2301049.0,
+        "PEAKMJD": 18897477.779979695,
+        "RA": 23130.736310770262,
+        "REDSHIFT_HELIO": 257.736530885892,
+        "SNTYPE": 15300.0
+      },
+      "columns": [
+        "DEC",
+        "DETECTED",
+        "NOBS",
+        "PEAKMJD",
+        "RA",
+        "REDSHIFT_HELIO",
+        "SNID",
+        "SNTYPE"
+      ],
+      "rows": 300,
+      "sha256": "83a55bd71c58e343f6dab34c64ecfb47df078a558e29fca6397f9f64b309b6ef"
+    },
+    "phot_df": {
+      "column_sums": {
+        "FLUXCAL": 209959679.8649795,
+        "FLUXCALERR": 1042074603.090244,
+        "FLUXTRUE": 209488636.54731634,
+        "MAG": 32078906.552267976,
+        "MJD": 144111717035.1,
+        "PHOTFLAG": 115228672.0
+      },
+      "columns": [
+        "FLT",
+        "FLUXCAL",
+        "FLUXCALERR",
+        "FLUXTRUE",
+        "MAG",
+        "MJD",
+        "PHOTFLAG",
+        "SNID"
+      ],
+      "rows": 2301049,
+      "sha256": "d529b837c68689841479f67c5df5ab99a5b1e09cbc5e6952c1a4e097b9f4ed17"
+    },
+    "summary": {
+      "n_detected": 150,
+      "n_total_dump": 300,
+      "n_with_obs": 300,
+      "snr_median": 0.7187574999312538,
+      "snr_p90": 1.8465810814757866
+    }
+  }
+}
