@@ -34,6 +34,10 @@ from sweep_publish_dataset import load_sweep_done_rows
 # HOWTO.md seccion 6) -- no todo head_df, solo lo util para un consumidor
 # externo que ya tiene la fotometria en phot_df.
 HEAD_CONTEXT_COLS = ["SNID", "REDSHIFT_HELIO", "SNTYPE", "DETECTED"]
+# Fase 98: metadatos por objeto que run_simsed_poc.py agrega desde esa fase.
+# Corridas anteriores no los tienen -- se exportan solo si existen (PAR_* son
+# los parametros del template, distintos por clase).
+OPTIONAL_HEAD_COLS = ["PEAKMJD", "TEMPLATE_INDEX", "MWEBV", "HOST_AV", "FIELD", "T0_CONVENTION"]
 
 
 def export_by_class(sweep_names: list[str], out_dir: Path) -> dict[str, Path]:
@@ -55,7 +59,9 @@ def export_by_class(sweep_names: list[str], out_dir: Path) -> dict[str, Path]:
             n_with_phot += 1
 
             phot = pd.read_parquet(phot_path)
-            head = pd.read_parquet(head_path)[HEAD_CONTEXT_COLS]
+            head = pd.read_parquet(head_path)
+            extra = [c for c in head.columns if c in OPTIONAL_HEAD_COLS or c.startswith("PAR_")]
+            head = head[HEAD_CONTEXT_COLS + extra]
             merged = phot.merge(head, on="SNID", how="left")
             merged["class_key"] = r["class_key"]
             merged["run_hash"] = r["run_hash"]

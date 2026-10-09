@@ -44,6 +44,7 @@ Uso (dentro de un job sbatch, nunca en el login node):
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 import sqlite3
 import sys
 import time
@@ -75,6 +76,7 @@ from searcheff import (
 # run_non1ased_poc.py/run_snia_ddf_poc.py (ver qc_lightcurves_notebook.py), no
 # copiado 3 veces.
 from qc_lightcurves_notebook import plot_notebook_style_lightcurves
+from head_metadata import extract_head_metadata
 
 # Fase 74: REPO_ROOT/SNANA_HOME resueltos por local_env.py (portabilidad --
 # antes hardcodeado a "/home/mvalenzuela"/"/home/mvalenzuela/AUTOSIM", ver
@@ -554,30 +556,80 @@ def load_simsed_templates_bolometric(simsed_dir):
     # el SED.INFO real de la clase declara la clave explicita en 0.
     do_shift = int(simsed_params.get("OPTFLAG_T0SHIFT_PEAKMAG", 1)) != 0
     templates = []
-    for file_name in file_names:
-        path = Path(file_name)
-        if not path.exists() and path.suffix != ".gz":
-            path = path.with_suffix(path.suffix + ".gz")
-        data = np.loadtxt(path, comments="#")
-        if do_shift:
-            # Fase 58: suma de flujo por fase vectorizada (sort +
-            # np.add.reduceat) -- el loop original (mascara booleana por
-            # cada fase unica) es O(N_fases x N_filas); para templates con
-            # grilla de fase muy fina (p.ej. KN-K17, kilonovas con cientos
-            # de fases) tardaba minutos por archivo. Mismo resultado,
-            # mismo orden de magnitud mas rapido.
-            order = np.argsort(data[:, 0], kind="stable")
-            phase_sorted = data[order, 0]
-            flux_sorted = data[order, 2]
-            phases, start_idx = np.unique(phase_sorted, return_index=True)
-            fluxsum = np.add.reduceat(flux_sorted, start_idx)
-            t0_bolo = float(phases[np.argmax(fluxsum)])
-        else:
-            t0_bolo = 0.0
-        templates.append(SEDTemplate(
-            data, sed_data_t0=t0_bolo, interpolation_type="linear", periodic=False,
-        ))
+    with _fast_three_column_to_matrix():
+        for file_name in file_names:
+            templates.append(_load_one_template(file_name, do_shift))
     return templates, flux_scale
+
+
+def three_column_to_matrix_vectorized(data):
+    """Fase 98: equivalente exacto y vectorizado de
+    `SEDTemplate._three_column_to_matrix` (LightCurveLynx 0.5.2), que llena
+    la matriz T x W con un loop de Python y dos `np.where` por fila -- el
+    86% del tiempo de carga de KN-K17 (perfil real en NLHPC: 3.1 s de 3.8 s
+    por template; `np.loadtxt` es solo 0.5 s, ver NOTES.md Fase 98).
+
+    Mismo resultado bit a bit: los indices salen de `searchsorted` sobre los
+    mismos arreglos unicos y ordenados (cada valor esta en ellos, asi que la
+    busqueda es exacta), las celdas sin dato quedan en 0.0, y si un par
+    (fase, lambda) se repite gana la ULTIMA fila, igual que el loop.
+    Verificado contra la funcion original en test_sed_fastpath.py y por la
+    regresion dorada."""
+    phases = data[:, 0]
+    wavelengths = data[:, 1]
+    fluxes = data[:, 2]
+    unique_wavelengths = np.sort(np.unique(wavelengths))
+    unique_phases = np.sort(np.unique(phases))
+    wave_idx = np.searchsorted(unique_wavelengths, wavelengths)
+    phase_idx = np.searchsorted(unique_phases, phases)
+    sed_matrix = np.zeros((len(unique_phases), len(unique_wavelengths)))
+    flat = phase_idx * len(unique_wavelengths) + wave_idx
+    # ultima ocurrencia de cada celda: unique sobre el arreglo invertido
+    _, last_rev = np.unique(flat[::-1], return_index=True)
+    last = len(flat) - 1 - last_rev
+    sed_matrix.ravel()[flat[last]] = fluxes[last]
+    return unique_phases, unique_wavelengths, sed_matrix
+
+
+@contextmanager
+def _fast_three_column_to_matrix():
+    """Usa three_column_to_matrix_vectorized() solo mientras dura el bloque.
+    `SEDTemplate.__init__` llama a la funcion por nombre de clase, asi que
+    una subclase no basta; el original se restaura siempre al salir."""
+    original = SEDTemplate.__dict__["_three_column_to_matrix"]
+    SEDTemplate._three_column_to_matrix = staticmethod(three_column_to_matrix_vectorized)
+    try:
+        yield
+    finally:
+        SEDTemplate._three_column_to_matrix = original
+
+
+def _load_one_template(file_name, do_shift):
+    """Lee un .SED y arma su SEDTemplate con t0 en el pico bolometrico si
+    corresponde (cuerpo identico al loop original de
+    load_simsed_templates_bolometric, solo extraido a una funcion)."""
+    path = Path(file_name)
+    if not path.exists() and path.suffix != ".gz":
+        path = path.with_suffix(path.suffix + ".gz")
+    data = np.loadtxt(path, comments="#")
+    if do_shift:
+        # Fase 58: suma de flujo por fase vectorizada (sort +
+        # np.add.reduceat) -- el loop original (mascara booleana por
+        # cada fase unica) es O(N_fases x N_filas); para templates con
+        # grilla de fase muy fina (p.ej. KN-K17, kilonovas con cientos
+        # de fases) tardaba minutos por archivo. Mismo resultado,
+        # mismo orden de magnitud mas rapido.
+        order = np.argsort(data[:, 0], kind="stable")
+        phase_sorted = data[order, 0]
+        flux_sorted = data[order, 2]
+        phases, start_idx = np.unique(phase_sorted, return_index=True)
+        fluxsum = np.add.reduceat(flux_sorted, start_idx)
+        t0_bolo = float(phases[np.argmax(fluxsum)])
+    else:
+        t0_bolo = 0.0
+    return SEDTemplate(
+        data, sed_data_t0=t0_bolo, interpolation_type="linear", periodic=False,
+    )
 
 
 def build_source_model(cfg: dict, obs_table: OpSim, seed_base: int, t_start: float, wfd: bool = False,
@@ -998,6 +1050,12 @@ def main(class_key: str, ngentot_override: int | None = None, seed_index: int = 
             "PEAKMJD": valid["t0"].to_numpy(),
         })
         head_df["NOBS"] = head_df["SNID"].map(nobs).fillna(0).astype(int)
+        # Fase 98: metadatos por objeto (template y sus parametros, MWEBV,
+        # host AV, campo, convencion de PEAKMJD) -- solo LEE lc["params"],
+        # que simulate_lightcurves() ya devuelve; no muestrea nada nuevo.
+        # Van despues de las columnas historicas, que no cambian.
+        meta = extract_head_metadata(valid, cfg.get("simsed_dir"), class_key, simsed_t0_mode)
+        head_df = pd.concat([head_df, meta.reset_index(drop=True)], axis=1)
         # replica el "continue" real de la version anterior: un objeto que
         # pierde TODAS sus observaciones por el gate de RESTLAMBDA_RANGE
         # tampoco entraba a head_rows -- se descarta del todo, no solo su

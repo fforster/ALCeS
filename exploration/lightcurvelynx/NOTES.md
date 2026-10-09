@@ -10249,3 +10249,88 @@ Nuevos: `kn_confusion_diag.py`, `kn_confusion_gen.sbatch`, `kn_confusion_diag.sb
 `kn_confusion_shrink.py`, `tests/golden/{check_golden.py,run_golden.sbatch,golden_reference.json}`,
 `pytest.ini`, `conftest.py`, `.github/workflows/tests.yml`. Modificados: `.gitignore`, `NOTES.md`.
 `run_simsed_poc.py`, `searcheff.py` y `snana_params.py` no se tocan.
+
+## Fase 98 -- metadatos por objeto en head_df, tabla de etiquetas y carga de templates ~9x más rápida (física idéntica bit a bit)
+
+### Regla de esta fase
+
+Cambios de ingeniería sin tocar los fundamentos. Toda edición a `run_simsed_poc.py` cambia el
+`code_hash` (y todos los `run_hash`), así que se agrupó en una sola versión y se validó con la
+regresión dorada de la Fase 97 antes de darla por buena.
+
+### 1. Metadatos por objeto (`head_metadata.py`)
+
+`simulate_lightcurves()` ya devuelve todos los parámetros muestreados en `lc["params"]` (struct de
+pyarrow); hasta ahora se descartaban. Se LEEN después de simular (no se muestrea nada nuevo, no se
+toca el RNG) y se agregan a `head_df` después de las columnas históricas, que no cambian:
+`TEMPLATE_INDEX`, `PAR_<nombre>` (parámetros del template desde su línea `SED:` del `SED.INFO` real),
+`MWEBV`, `HOST_AV`/`HOST_EBV` (solo clases con extinción de host), `FIELD` (DDF) y `T0_CONVENTION`
+(qué significa `PEAKMJD`: `bolometric_peak` o `native_phase0` para KN-BULLA19/PISN-STELLA-*).
+
+- Nombres reales sacados con una sonda en NLHPC (`SIMSEDModel_0.selected_template`, `.ebv`,
+  `.host_ebv`, `host_av.function_node_result`, `ObsTableRADECSampler:_non_func_1.field`); el sufijo
+  numérico del nodo se busca, no se fija.
+- Bug encontrado en la verificación real: SNIa-91bg declara `PARNAMES: stretch color` sin columna
+  `*_INDEX` (las otras 12 clases sí la tienen); el lector descartaba `stretch`. Ahora se descartan
+  solo las columnas `*_INDEX`. Revisado en los 13 `SED.INFO`.
+- Una columna que una clase no tiene no se inventa (p.ej. SNIa-91bg no tiene `HOST_AV`).
+- Verificado en corridas reales (KN-BULLA19, SNIa-91bg): todas las columnas presentes, 0 nulos.
+- Solo `run_simsed_poc.py` (el runner que usan sweeps, webapp y export). SNIa y NON1ASED quedan para
+  después, con su propia referencia dorada grabada antes de tocarlos.
+
+### 2. Etiquetas (`class_labels.py`) y export
+
+- La tabla se GENERA desde `CLASS_CONFIGS` de los runners (no un YAML a mano que se desincronice).
+  `test_head_metadata.py::test_class_labels` falla si aparece un `SNTYPE` compartido nuevo que no
+  esté en `KNOWN_SHARED_SNTYPES` (hoy: 12 y 13 = variantes de la misma clase; 51 = KN-K17, TDE-MOSFIT
+  y TDE NON1ASED, el choque real). Los `SNTYPE` no se renumeran: vienen de los `.INPUT` reales.
+- En modo `simgen_include` la Capa 2 no escribe `GENTYPE` (`templates.py:196` es solo el modo
+  fallback), así que los 60/61/62 de `setup_autosim.py` no son una fuente confiable de etiquetas.
+- `sweep_publish_dataset.py`: el manifest declara `label_column: "class_key"` y un `label_note`.
+- `sweep_export_by_class.py`: exporta también `PEAKMJD` y los metadatos nuevos cuando existen
+  (corridas viejas no los tienen y siguen exportándose igual).
+
+### 3. Carga de templates ~9x más rápida
+
+Plan original: caché en disco del `.SED` parseado. Descartado al medir:
+- Una caché de K17 serían ~6 GB (329 × ~19 MB float64) en un home que ya se llenó con 2 GB.
+- `np.loadtxt` NO es el cuello de botella (0.49 s por archivo de K17; pandas no es más rápido).
+- Perfil real (cProfile, KN-K17): 86% del tiempo en `SEDTemplate._three_column_to_matrix` de
+  LightCurveLynx 0.5.2, un loop de Python con dos `np.where` por fila (9.3 M llamadas para 6
+  templates).
+
+`three_column_to_matrix_vectorized()` hace lo mismo con `searchsorted` (exacto: cada valor está en
+los únicos), celdas sin dato en 0.0 y la última fila gana en pares repetidos, igual que el loop. Se
+usa solo dentro de `load_simsed_templates_bolometric` vía un context manager que restaura el
+original al salir (también por excepción). `test_sed_fastpath.py` lo compara bit a bit contra la
+función de la librería en 5 casos (ordenado, desordenado, pares faltantes, repetidos, negativos).
+
+Tiempo de carga medido en la regresión dorada (mismos nodos `largemem`):
+
+| clase | templates | antes | ahora |
+|---|---:|---:|---:|
+| SNIa-91bg | 35 | 31.9 s | 3.6 s |
+| CaRT | 225 | 84.9 s | 10.9 s |
+| KN-BULLA19 | 550 | 165.0 s | 17.4 s |
+| TDE-MOSFIT | 742 | 141.6 s | 19.9 s |
+
+Job dorado completo: 12:49 → 6:37. Candidato a issue upstream en LightCurveLynx (no publicado: misma
+regla de siempre, solo con confirmación explícita).
+
+### Validación
+
+- Regresión dorada `--check` con el código nuevo: **idéntico bit a bit** en las 4 clases (job
+  14959855; repetida con el código final: job 14969531, también idéntico).
+- `test_sed_fastpath.py` y `test_head_metadata.py` en NLHPC: todo OK; pytest local 18/18.
+
+### Pendiente del plan (no hecho en esta fase)
+
+- Unit tests de los samplers de `snana_params.py`, `searcheff.py` y `non1ased.py`.
+- `keep_phot=detected` (solo detectados, fuera del hash).
+- Metadatos en `run_non1ased_poc.py` y `run_snia_ddf_poc.py`.
+
+### Archivos de esta fase
+
+Nuevos: `head_metadata.py`, `class_labels.py`, `test_head_metadata.py`, `test_sed_fastpath.py`.
+Modificados: `run_simsed_poc.py` (`code_hash` nuevo, física idéntica), `sweep_export_by_class.py`,
+`sweep_publish_dataset.py`, `NOTES.md`.

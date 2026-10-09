@@ -123,6 +123,13 @@ def publish_dataset(sweep_names: list[str], triggered_by: str = "cli") -> Path:
         ingestion_format_pending_reason=ingestion_format_pending_reason,
         by_class_schema_version=1 if by_class_paths else None,
         by_class_files={k: f"by_class/{k}.parquet" for k in by_class_paths} if by_class_paths else {},
+        # Fase 98: el SNTYPE numerico NO identifica la clase de forma unica
+        # (KN-K17 y TDE-MOSFIT comparten 51, las variantes -elastic comparten
+        # el de su clase base) -- ver class_labels.py.
+        label_column="class_key",
+        label_note=("Use class_key as the class label. SNTYPE is kept for traceability to the "
+                    "SNANA inputs but is not unique across classes. PEAKMJD has a class-dependent "
+                    "origin; see T0_CONVENTION where present."),
     )
     sweep_hash.write_json_atomic(manifest_path, manifest)
 
@@ -135,7 +142,10 @@ def publish_dataset(sweep_names: list[str], triggered_by: str = "cli") -> Path:
             "(`REDSHIFT_HELIO`/`SNTYPE`/`DETECTED`) y procedencia (`class_key`/`run_hash`/"
             "`source_sweep`/`seed_index`/`wfd`). Solo incluye corridas de sweeps con "
             "`keep_phot=true` (Fase 81) -- ver `manifest.json[\"by_class_files\"]` para la lista "
-            "real de clases exportadas.\n"
+            "real de clases exportadas.\n\n"
+            "**Etiqueta de clase: usar `class_key`, no `SNTYPE`** -- el `SNTYPE` numerico se "
+            "repite entre clases (p.ej. KN-K17 y TDE-MOSFIT = 51). `PEAKMJD` tiene un origen "
+            "distinto segun la clase (ver `T0_CONVENTION` en corridas desde la Fase 98).\n"
         )
     else:
         by_class_note = (
