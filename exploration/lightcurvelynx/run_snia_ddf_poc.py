@@ -148,15 +148,30 @@ def snana_noise_columns(df_ddf: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def main(seed_index: int = 0, wfd: bool = False):
+# Fase 99: GENRANGE_TREST real de SIMGEN_INCLUDE_SNIa-SALT2.INPUT (-100/300,
+# leido en NLHPC). Solo con real_trest=True; el default sigue siendo la
+# ventana historica de los ratios de Fase 70 (NOTES.md Fase 99).
+GENRANGE_TREST_REAL = (-100.0, 300.0)
+HISTORICAL_TREST = (-30, 100)
+
+
+def main(seed_index: int = 0, wfd: bool = False, out_dir_override: Path | str | None = None,
+         real_trest: bool = False):
     # Fase 5: seed_index != 0 corre una realizacion independiente con
     # semilla real distinta, en un directorio de salida separado -- mismo
     # patron que run_simsed_poc.py (ver comentario ahi).
     seed_base = SEED_BASE + seed_index * 1_000_000
     seed_suffix = f"_seed{seed_index}" if seed_index else ""
     wfd_suffix = "_wfd" if wfd else ""
-    out_dir = OUT_DIR if not (seed_suffix or wfd_suffix) else HERE / f"poc_output{seed_suffix}{wfd_suffix}"
-    out_dir.mkdir(exist_ok=True)
+    trest_suffix = "_realtrest" if real_trest else ""
+    if out_dir_override is not None:
+        out_dir = Path(out_dir_override)
+    elif not (seed_suffix or wfd_suffix or trest_suffix):
+        out_dir = OUT_DIR
+    else:
+        out_dir = HERE / f"poc_output{seed_suffix}{wfd_suffix}{trest_suffix}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    trest_range = GENRANGE_TREST_REAL if real_trest else HISTORICAL_TREST
     t_start = time.time()
 
     con = sqlite3.connect(str(OPSIM_DB))
@@ -316,7 +331,7 @@ def main(seed_index: int = 0, wfd: bool = False):
     # a cualquier nodo del grafo sin seed propio (p.ej. ruido fotometrico),
     # que sin esto cae en un default no reproducible (ver run_simsed_poc.py).
     lc = simulate_lightcurves(
-        source, NGENTOT_LC, survey_info, rest_time_window_offset=(-30, 100), rng=np.random.default_rng(seed_base + 8),
+        source, NGENTOT_LC, survey_info, rest_time_window_offset=trest_range, rng=np.random.default_rng(seed_base + 8),
     )
     sim_wall_time = time.time() - t_sim0
     print(f"[{time.time()-t_start:.1f}s] simulacion terminada: {len(lc)} objetos, "
@@ -417,6 +432,8 @@ def main(seed_index: int = 0, wfd: bool = False):
         "snr_p90": float(snr_sim.quantile(0.9)),
         "snr_median_snana_ref": 0.78,
         "snr_p90_snana_ref": 2.26,
+        "rest_time_window": list(trest_range),
+        "real_trest": real_trest,
     }, indent=2))
 
     # -- QC reusando pipeline.postproc.qc sin modificar --
@@ -446,7 +463,8 @@ if __name__ == "__main__":
     # Fase 17: --wfd en cualquier posicion (ver run_simsed_poc.py).
     _args = sys.argv[1:]
     _wfd = "--wfd" in _args
-    if _wfd:
-        _args = [a for a in _args if a != "--wfd"]
+    # Fase 99: --real-trest usa el GENRANGE_TREST real del .INPUT (opcional).
+    _real_trest = "--real-trest" in _args
+    _args = [a for a in _args if a not in ("--wfd", "--real-trest")]
     _seed_index = int(_args[0]) if len(_args) == 1 else 0
-    main(seed_index=_seed_index, wfd=_wfd)
+    main(seed_index=_seed_index, wfd=_wfd, real_trest=_real_trest)

@@ -39,6 +39,12 @@ CASES = [
     {"engine": "simsed", "class_key": "KN-BULLA19", "seed_index": 7, "ngentot": 300},
     {"engine": "simsed", "class_key": "CaRT", "seed_index": 7, "ngentot": 300},
     {"engine": "simsed", "class_key": "TDE-MOSFIT", "seed_index": 7, "ngentot": 300},
+    # Fase 99: los otros dos runners (NON1ASED y SALT2). Semilla 97: sus
+    # main() historicos escriben a poc_output_*_seed<N> fijo, y 97 no pisa
+    # ninguna realizacion existente (0-4).
+    {"engine": "non1ased", "class_key": "TDE", "seed_index": 97, "ngentot": 300},
+    {"engine": "non1ased", "class_key": "KN-BULLA-BNS-M2COMP", "seed_index": 97, "ngentot": 300},
+    {"engine": "snia", "class_key": "SNIa", "seed_index": 97, "ngentot": 300},
 ]
 SORT_KEYS = {"head_df": ["SNID"], "phot_df": ["SNID", "MJD", "FLT"]}
 SUMMARY_KEYS = ["n_with_obs", "n_detected", "n_total_dump", "snr_median", "snr_p90"]
@@ -57,12 +63,32 @@ def frame_fingerprint(df: pd.DataFrame, columns: list[str], sort_keys: list[str]
 
 def run_case(case: dict, work: Path) -> Path:
     out = work / f"{case['class_key']}_seed{case['seed_index']}"
-    if case["engine"] != "simsed":
-        raise ValueError(f"engine no soportado todavia: {case['engine']}")
     sys.path.insert(0, str(LCL_DIR))
-    from run_simsed_poc import main
-    main(case["class_key"], ngentot_override=case["ngentot"], seed_index=case["seed_index"],
-         out_dir_override=out)
+    cls, seed, n = case["class_key"], case["seed_index"], case["ngentot"]
+    if case["engine"] == "simsed":
+        from run_simsed_poc import main
+        main(cls, ngentot_override=n, seed_index=seed, out_dir_override=out)
+        return out
+    if case["engine"] == "non1ased":
+        import run_non1ased_poc as runner
+        default = LCL_DIR / f"poc_output_non1ased_{cls.lower().replace('-', '')}_seed{seed}"
+        run = lambda: runner.main(cls, ngentot_override=n, seed_index=seed)  # noqa: E731
+    elif case["engine"] == "snia":
+        import run_snia_ddf_poc as runner
+        runner.NGENTOT_LC = n  # main() lo lee del modulo en tiempo de ejecucion
+        default = LCL_DIR / f"poc_output_seed{seed}"
+        run = lambda: runner.main(seed_index=seed)  # noqa: E731
+    else:
+        raise ValueError(f"engine desconocido: {case['engine']}")
+    # Estos main() no aceptan (o no aceptaban) out_dir: se usa su ruta por
+    # defecto y se mueve. Si ya existe, no es nuestra -- no se toca.
+    if default.exists():
+        raise FileExistsError(f"{default} ya existe; borrarlo a mano si es de una corrida dorada anterior")
+    try:
+        run()
+        shutil.move(str(default), str(out))
+    finally:
+        shutil.rmtree(default, ignore_errors=True)
     return out
 
 
@@ -85,20 +111,26 @@ def main() -> int:
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--record", action="store_true")
     mode.add_argument("--check", action="store_true")
+    mode.add_argument("--record-new", action="store_true",
+                      help="grabar solo los casos sin referencia (casos nuevos, codigo sin tocar)")
     ap.add_argument("--keep-work", action="store_true", help="no borrar las corridas temporales")
     args = ap.parse_args()
 
-    reference = json.loads(REFERENCE.read_text()) if args.check else {}
+    reference = json.loads(REFERENCE.read_text()) if (args.check or args.record_new) else {}
     work = Path(tempfile.mkdtemp(prefix="alces_golden_", dir=LCL_DIR))
     results, failures = {}, []
     try:
         for case in CASES:
             key = f"{case['class_key']}|seed{case['seed_index']}|n{case['ngentot']}"
+            if case["engine"] != "simsed":
+                key = f"{case['engine']}:{key}"
             ref = reference.get(key)
+            if args.record_new and ref is not None:
+                continue
             if args.check and ref is None:
                 failures.append(f"{key}: no hay referencia grabada")
                 continue
-            cols = {n: ref[n]["columns"] for n in ("head_df", "phot_df")} if ref else None
+            cols = {n: ref[n]["columns"] for n in ("head_df", "phot_df")} if (ref and args.check) else None
             got = fingerprint_case(run_case(case, work), cols)
             results[key] = got
             if args.check:
@@ -117,7 +149,9 @@ def main() -> int:
         if not args.keep_work:
             shutil.rmtree(work, ignore_errors=True)
 
-    if args.record:
+    if args.record or args.record_new:
+        if args.record_new:
+            results = {**reference, **results}
         REFERENCE.write_text(json.dumps(results, indent=2, sort_keys=True))
         print(f"[golden] referencia grabada en {REFERENCE}")
         return 0

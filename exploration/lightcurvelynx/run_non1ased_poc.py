@@ -208,15 +208,36 @@ def snana_noise_columns(df_ddf: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def main(class_key: str, ngentot_override: int | None = None, seed_index: int = 0, wfd: bool = False):
+# Fase 99: GENRANGE_TREST real de cada .INPUT NON1ASED (leido en NLHPC,
+# run_SNANA/elastic/model_config/SIMGEN_INCLUDE_*: las 5 declaran -100/500).
+# Solo se usa con real_trest=True -- el default sigue siendo la ventana
+# historica (-30, 100) con la que se midieron los ratios de Fase 70, hasta
+# que el profesor apruebe el cambio (NOTES.md Fase 99).
+GENRANGE_TREST_REAL = {
+    "SNIa-91bg": (-100.0, 500.0),
+    "SNIax": (-100.0, 500.0),
+    "TDE": (-100.0, 500.0),
+    "SLSN-I": (-100.0, 500.0),
+    "KN-BULLA-BNS-M2COMP": (-100.0, 500.0),
+}
+HISTORICAL_TREST = (-30, 100)
+
+
+def main(class_key: str, ngentot_override: int | None = None, seed_index: int = 0, wfd: bool = False,
+         out_dir_override: Path | str | None = None, real_trest: bool = False):
     cfg = CLASS_CONFIGS[class_key]
     # Fase 17: WFD usa el mismo NGENTOT que DDF (ver run_simsed_poc.py).
     ngentot = ngentot_override if ngentot_override is not None else cfg.get("ngentot_lc", NGENTOT_LC)
     seed_base = SEED_BASE + seed_index * 1_000_000
     seed_suffix = f"_seed{seed_index}" if seed_index else ""
     wfd_suffix = "_wfd" if wfd else ""
-    out_dir = HERE / f"poc_output_non1ased_{class_key.lower().replace('-', '')}{seed_suffix}{wfd_suffix}"
-    out_dir.mkdir(exist_ok=True)
+    trest_suffix = "_realtrest" if real_trest else ""
+    if out_dir_override is not None:
+        out_dir = Path(out_dir_override)
+    else:
+        out_dir = HERE / f"poc_output_non1ased_{class_key.lower().replace('-', '')}{seed_suffix}{wfd_suffix}{trest_suffix}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    trest_range = GENRANGE_TREST_REAL[class_key] if real_trest else HISTORICAL_TREST
     t_start = time.time()
 
     con = sqlite3.connect(str(OPSIM_DB))
@@ -358,7 +379,7 @@ def main(class_key: str, ngentot_override: int | None = None, seed_index: int = 
     t_sim0 = time.time()
     lc = simulate_lightcurves(source_model, ngentot, survey_info=SurveyInfo(
         obstable=obs_table, passbands=passband_group, survey_name="LSST",
-    ), rest_time_window_offset=(-30, 100), rng=np.random.default_rng(seed_base + 2))
+    ), rest_time_window_offset=trest_range, rng=np.random.default_rng(seed_base + 2))
     sim_wall_time = time.time() - t_sim0
     print(f"[{time.time()-t_start:.1f}s] simulacion terminada: {len(lc)} objetos, "
           f"{sim_wall_time:.1f}s ({sim_wall_time/max(len(lc),1)*1000:.2f} ms/objeto)")
@@ -433,6 +454,8 @@ def main(class_key: str, ngentot_override: int | None = None, seed_index: int = 
         "detection_efficiency_pct": 100.0 * len(detected_snids) / ngentot,
         "snr_median": float(snr_sim.median()),
         "snr_p90": float(snr_sim.quantile(0.9)),
+        "rest_time_window": list(trest_range),
+        "real_trest": real_trest,
     }, indent=2))
 
     sys.path.insert(0, str(REPO_ROOT))
@@ -462,10 +485,12 @@ if __name__ == "__main__":
     # Fase 17: ver run_simsed_poc.py -- --wfd en cualquier posicion.
     _args = sys.argv[1:]
     _wfd = "--wfd" in _args
-    if _wfd:
-        _args = [a for a in _args if a != "--wfd"]
+    # Fase 99: --real-trest usa el GENRANGE_TREST real del .INPUT (opcional).
+    _real_trest = "--real-trest" in _args
+    _args = [a for a in _args if a not in ("--wfd", "--real-trest")]
     if len(_args) not in (1, 2) or _args[0] not in CLASS_CONFIGS:
-        print(f"uso: python3 run_non1ased_poc.py <clase> [seed_index] [--wfd]  (opciones: {list(CLASS_CONFIGS)})")
+        print(f"uso: python3 run_non1ased_poc.py <clase> [seed_index] [--wfd] [--real-trest]  "
+              f"(opciones: {list(CLASS_CONFIGS)})")
         sys.exit(1)
     _seed_index = int(_args[1]) if len(_args) == 2 else 0
-    main(_args[0], seed_index=_seed_index, wfd=_wfd)
+    main(_args[0], seed_index=_seed_index, wfd=_wfd, real_trest=_real_trest)

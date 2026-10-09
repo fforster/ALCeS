@@ -214,5 +214,167 @@
       "snr_median": 0.7187574999312538,
       "snr_p90": 1.8465810814757866
     }
+  },
+  "non1ased:KN-BULLA-BNS-M2COMP|seed97|n300": {
+    "head_df": {
+      "column_sums": {
+        "DEC": -6106.115847944382,
+        "DETECTED": 7.0,
+        "NOBS": 426373.0,
+        "PEAKMJD": 18761306.593753234,
+        "RA": 24195.723315960568,
+        "REDSHIFT_HELIO": 107.14381114143265,
+        "SNTYPE": 18476.0
+      },
+      "columns": [
+        "DEC",
+        "DETECTED",
+        "NOBS",
+        "PEAKMJD",
+        "RA",
+        "REDSHIFT_HELIO",
+        "SNID",
+        "SNTYPE"
+      ],
+      "rows": 298,
+      "sha256": "2396283cb3adbe8486dac1dd93b622b00a04eb07d9d8f98421c9b8560c0136c5"
+    },
+    "phot_df": {
+      "column_sums": {
+        "FLUXCAL": 1414524.0827235975,
+        "FLUXCALERR": 193901057.5871843,
+        "FLUXTRUE": 1589121.834586969,
+        "MAG": 5518748.931673048,
+        "MJD": 26613248920.765755,
+        "PHOTFLAG": 671744.0
+      },
+      "columns": [
+        "FLT",
+        "FLUXCAL",
+        "FLUXCALERR",
+        "FLUXTRUE",
+        "MAG",
+        "MJD",
+        "PHOTFLAG",
+        "SNID"
+      ],
+      "rows": 426373,
+      "sha256": "b0588a3fc916a8196a02938a7c1184382b3864370ff3170f8578eef01fdad9f0"
+    },
+    "summary": {
+      "n_detected": 7,
+      "n_total_dump": 300,
+      "n_with_obs": 298,
+      "snr_median": 0.67720073422135,
+      "snr_p90": 1.6518145474209915
+    }
+  },
+  "non1ased:TDE|seed97|n300": {
+    "head_df": {
+      "column_sums": {
+        "DEC": -6153.796312904247,
+        "DETECTED": 90.0,
+        "NOBS": 605134.0,
+        "PEAKMJD": 18826134.171942715,
+        "RA": 24258.44296150725,
+        "REDSHIFT_HELIO": 256.95455491435223,
+        "SNTYPE": 15249.0
+      },
+      "columns": [
+        "DEC",
+        "DETECTED",
+        "NOBS",
+        "PEAKMJD",
+        "RA",
+        "REDSHIFT_HELIO",
+        "SNID",
+        "SNTYPE"
+      ],
+      "rows": 299,
+      "sha256": "8fea3fd5e95527c6231c8568fe8772ab562616344e4277f0854c77f76e62de04"
+    },
+    "phot_df": {
+      "column_sums": {
+        "FLUXCAL": 85615170.62630925,
+        "FLUXCALERR": 272745969.18601847,
+        "FLUXTRUE": 86025607.48614004,
+        "MAG": 9325835.489275437,
+        "MJD": 37777553129.78454,
+        "PHOTFLAG": 37306368.0
+      },
+      "columns": [
+        "FLT",
+        "FLUXCAL",
+        "FLUXCALERR",
+        "FLUXTRUE",
+        "MAG",
+        "MJD",
+        "PHOTFLAG",
+        "SNID"
+      ],
+      "rows": 605134,
+      "sha256": "e1732e8748e00d7ee6b7d375475f5e04b68110b2cb5bbc6819b9aeadf117590e"
+    },
+    "summary": {
+      "n_detected": 90,
+      "n_total_dump": 300,
+      "n_with_obs": 299,
+      "snr_median": 0.7750250517315118,
+      "snr_p90": 2.0794028172123893
+    }
+  },
+  "snia:SNIa|seed97|n300": {
+    "head_df": {
+      "column_sums": {
+        "DEC": -6228.270122961407,
+        "DETECTED": 123.0,
+        "NOBS": 601121.0,
+        "PEAKMJD": 18800069.017094888,
+        "RA": 24132.5088543849,
+        "REDSHIFT_HELIO": 248.82720132894977,
+        "SNTYPE": 298.0
+      },
+      "columns": [
+        "DEC",
+        "DETECTED",
+        "NOBS",
+        "PEAKMJD",
+        "RA",
+        "REDSHIFT_HELIO",
+        "SNID",
+        "SNTYPE"
+      ],
+      "rows": 298,
+      "sha256": "dc7a7b39bd94cd540d9e7dfb3458594c59ce36511c1f5cbd8ee9f2b909628025"
+    },
+    "phot_df": {
+      "column_sums": {
+        "FLUXCAL": 224514691.89152372,
+        "FLUXCALERR": 237007354.4277374,
+        "FLUXTRUE": 224179472.8159626,
+        "MAG": 10013132.930355426,
+        "MJD": 37492864649.38519,
+        "PHOTFLAG": 128520192.0
+      },
+      "columns": [
+        "FLT",
+        "FLUXCAL",
+        "FLUXCALERR",
+        "FLUXTRUE",
+        "MAG",
+        "MJD",
+        "PHOTFLAG",
+        "SNID"
+      ],
+      "rows": 601121,
+      "sha256": "00f38c0300b945c92adb0f2e4a4e9dc9e083a3928a0b9b46e1c0d3823cdbde51"
+    },
+    "summary": {
+      "n_detected": 123,
+      "n_total_dump": 300,
+      "n_with_obs": 298,
+      "snr_median": 0.9018265694288932,
+      "snr_p90": 3.1336357492128397
+    }
   }
 }

@@ -21,6 +21,8 @@ exploration/lightcurvelynx/sweep_runs/
 exploration/lightcurvelynx/datasets/
 # salida de kn_confusion_diag.py (corridas con phot_df, CSV, figuras)
 exploration/lightcurvelynx/kn_confusion_diag*/
+# salida de fase99_trest_validation.sbatch (summary.json/head_df por corrida)
+exploration/lightcurvelynx/fase99_trest/
 # Fase 75: bundles de datos vendorizados (vendor_snana_class.py) para el
 # port local -- config/plantillas reales de SNANA, no codigo; mismo criterio
 # que poc_output*/ arriba (se generan/descargan, no se versionan). Se

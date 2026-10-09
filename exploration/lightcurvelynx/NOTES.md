@@ -10334,3 +10334,79 @@ regla de siempre, solo con confirmación explícita).
 Nuevos: `head_metadata.py`, `class_labels.py`, `test_head_metadata.py`, `test_sed_fastpath.py`.
 Modificados: `run_simsed_poc.py` (`code_hash` nuevo, física idéntica), `sweep_export_by_class.py`,
 `sweep_publish_dataset.py`, `NOTES.md`.
+
+## Fase 99 -- brechas de fidelidad como opciones: GENRANGE_TREST real (SNIa + NON1ASED) y auditoría de la extrapolación tardía
+
+### Regla
+
+Toda brecha de fidelidad se implementa como opción **apagada por defecto**, se mide con las mismas 5
+semillas que la referencia histórica, y solo se adopta como default con aprobación del profesor.
+
+### 1. `GENRANGE_TREST` real en SNIa y las 5 NON1ASED (`--real-trest`)
+
+- Valores leídos en NLHPC de los `.INPUT` reales: las 5 NON1ASED declaran `-100 500`;
+  `SIMGEN_INCLUDE_SNIa-SALT2.INPUT` declara `-100 300`. Las tres KN declaran además
+  `MINSLOPE_EXTRAPMAG_LATE: 0.1` (no 0.05: ese es el valor del `SED.INFO`, que el `.INPUT` pisa).
+- `run_non1ased_poc.py` y `run_snia_ddf_poc.py`: `main(..., out_dir_override=None,
+  real_trest=False)` y `--real-trest` en la CLI. Con la opción apagada se usa la misma tupla
+  `(-30, 100)` de siempre. `summary.json` registra `rest_time_window` y `real_trest`.
+- **Regresión dorada ampliada** a los otros dos runners (TDE y KN-BULLA-BNS NON1ASED, SNIa SALT2,
+  semilla 97). Las referencias se grabaron con el código ORIGINAL (`--record-new`, job 14971899) y
+  `--check` con el código nuevo y la opción apagada dio **idéntico bit a bit en los 7 casos** (job
+  14971989). Nota: el `run_snia_ddf_poc.py` de NLHPC tenía fin de línea CRLF (subida antigua desde
+  Windows); el código es idéntico al de git.
+- **Medición** (`fase99_trest_validation.sbatch`, 6 clases × semillas 0-4, `fase99_compare_trest.py`;
+  los valores históricos se leen de los `summary.json` de Fase 70 en disco y reproducen su tabla):
+
+| clase | det. ventana (-30,100) | det. GENRANGE_TREST real | ratio SNANA antes | ratio SNANA después |
+|---|---:|---:|---:|---:|
+| SNIa | 38.36% ± 1.29 | 38.27% ± 1.41 | 1.285 | 1.282 |
+| SNIa-91bg | 8.72% ± 0.60 | 8.56% ± 0.55 | 1.186 | 1.165 |
+| SNIax | 1.75% ± 0.47 | 1.74% ± 0.41 | 1.174 | 1.168 |
+| TDE | 27.60% ± 0.97 | 27.62% ± 0.69 | 1.194 | 1.195 |
+| SLSN-I | 69.24% | (semillas 1-4: 69.3, 69.85, 71.35, 68.85; semilla 0 pendiente) | 1.258 | — |
+| KN-BULLA-BNS-M2COMP | 1.85% ± 0.28 | 1.85% ± 0.30 | 1.326 | 1.326 |
+
+  **Conclusión:** el efecto está dentro del ruido entre semillas en todas las clases. La ventana real
+  NO explica el residuo de sobre-detección de 1.17-1.33x de estas clases (a diferencia de las SIMSED
+  en Fase 59, donde interactuaba con el trigger viejo). Adoptarla como default sería fiel al `.INPUT`
+  y no cambia los ratios publicados -- decisión pendiente del profesor.
+- La tarea SLSN-I semilla 0 falló la primera vez por cuota de disco (5 corridas escribiendo `phot_df`
+  grandes a la vez); se relanzó sola.
+
+### 2. Extrapolación tardía (`MINSLOPE_EXTRAPMAG_LATE`): auditada, NO implementada
+
+Lo que hace SNANA de verdad (`get_flux_SEDMODEL`, `genmag_SEDtools.c`), distinto de lo asumido en el
+plan:
+- Se aplica a **todas** las clases SIMSED, no solo a las KN; `MINSLOPE` es solo el piso de la
+  pendiente.
+- Opera sobre el **flujo por banda** (filtro observado, a ese z), no sobre el SED: ajuste lineal por
+  mínimos cuadrados, en magnitudes, de los últimos 6 días del modelo; pendiente = `max(|ajuste|,
+  MINSLOPE)`; se activa para `Trest > MAXDAY - 1`. Antes de `MINDAY` el flujo es 0.
+- LightCurveLynx devuelve flujo 0 fuera del rango del template.
+
+`audit_minslope_late.py` midió cuánto importa para las KN (las de template más corto):
+
+| clase | templates con flujo en su última fase | más brillante a z_min | % de la población generada sobre 24.5 / 26.0 mag en la última fase |
+|---|---:|---:|---:|
+| KN-K17 | 152/329 (84 sobre 24.5 a z_min) | 20.40 | 0.07% / 0.50% |
+| KN-BULLA19 | 479/550 (100 sobre 24.5 a z_min) | 22.67 | 0.00% / 0.04% |
+
+La hipótesis inicial ("ya son invisibles al final del template") era **falsa** para templates
+individuales a z bajo, pero ponderado por la población real (dN/dz de la clase) afecta a ~0.07% de
+las K17 generadas, ~1% de las detectadas. No cambia la eficiencia de detección; solo la cola de una
+minoría de curvas. **Recomendación: no implementar por ahora** (requiere reemplazar la evaluación de
+flujo por banda de LightCurveLynx); queda como propuesta documentada. No se midió para las otras 11
+clases SIMSED (templates mucho más largos respecto de su evolución).
+
+### 3. Residuo de SNIa/NON1ASED (`SIMSED_REDCOR`): no abordado
+
+Con el `GENRANGE_TREST` descartado como causa, el residuo de 1.17-1.33x sigue abierto. Queda para una
+fase propia; no se tocó nada.
+
+### Archivos de esta fase
+
+Nuevos: `audit_minslope_late.py`, `fase99_trest_validation.sbatch`, `fase99_compare_trest.py`.
+Modificados: `run_non1ased_poc.py`, `run_snia_ddf_poc.py` (opción `real_trest`, `out_dir_override`;
+no están en `CODE_FILES`), `tests/golden/check_golden.py` (motores non1ased/snia, `--record-new`),
+`tests/golden/golden_reference.json` (+3 casos), `.gitignore`, `NOTES.md`.
