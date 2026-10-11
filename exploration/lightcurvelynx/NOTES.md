@@ -10364,7 +10364,7 @@ semillas que la referencia histórica, y solo se adopta como default con aprobac
 | SNIa-91bg | 8.72% ± 0.60 | 8.56% ± 0.55 | 1.186 | 1.165 |
 | SNIax | 1.75% ± 0.47 | 1.74% ± 0.41 | 1.174 | 1.168 |
 | TDE | 27.60% ± 0.97 | 27.62% ± 0.69 | 1.194 | 1.195 |
-| SLSN-I | 69.24% | (semillas 1-4: 69.3, 69.85, 71.35, 68.85; semilla 0 pendiente) | 1.258 | — |
+| SLSN-I | 69.24% ± 0.72 | 69.63% ± 1.05 | 1.258 | 1.266 |
 | KN-BULLA-BNS-M2COMP | 1.85% ± 0.28 | 1.85% ± 0.30 | 1.326 | 1.326 |
 
   **Conclusión:** el efecto está dentro del ruido entre semillas en todas las clases. La ventana real
@@ -10372,7 +10372,7 @@ semillas que la referencia histórica, y solo se adopta como default con aprobac
   en Fase 59, donde interactuaba con el trigger viejo). Adoptarla como default sería fiel al `.INPUT`
   y no cambia los ratios publicados -- decisión pendiente del profesor.
 - La tarea SLSN-I semilla 0 falló la primera vez por cuota de disco (5 corridas escribiendo `phot_df`
-  grandes a la vez); se relanzó sola.
+  grandes a la vez); se relanzó sola (job 14979473, completada) y la tabla ya incluye sus 5 semillas.
 
 ### 2. Extrapolación tardía (`MINSLOPE_EXTRAPMAG_LATE`): auditada, NO implementada
 
