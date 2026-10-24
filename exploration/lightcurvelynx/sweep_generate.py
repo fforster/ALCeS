@@ -47,7 +47,7 @@ def available_classes() -> list[str]:
     a medida que `vendor_snana_class.py` empaquete mas clases (Fase 75)."""
     out = []
     for class_key, cfg in CLASS_CONFIGS.items():
-        simsed_dir = Path(cfg["simsed_dir"])
+        simsed_dir = Path(cfg.get("simsed_dir") or cfg["salt2_dir"])   # SNIa-SALT2 (2026-09-30): SALT2 model dir
         if simsed_dir.is_dir() and any(simsed_dir.iterdir()):
             out.append(class_key)
     return sorted(out)

@@ -1,0 +1,25 @@
+sweep_name: LOGZ_SLSNI_WFD_w2
+description: logz SLSN-I|logz|WFD|w2
+seeds:
+- 25000
+- 25001
+- 25002
+- 25003
+- 25004
+modes:
+- wfd: true
+  simsed_t0_mode: bolometric_peak
+classes:
+- SLSN-I|logz|WFD|w2
+ngentot_overrides:
+  SLSN-I|logz|WFD|w2: 8612
+resources:
+  default:
+    mem: 32G
+    time: 06:00:00
+    cpus: 4
+  overrides: {}
+max_concurrent:
+  default: 15
+partition: general
+keep_phot: true

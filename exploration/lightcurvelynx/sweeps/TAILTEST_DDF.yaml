@@ -1,0 +1,21 @@
+sweep_name: TAILTEST_DDF
+description: SNII_NMF_tail v2 end-to-end test
+seeds:
+- 990
+modes:
+- wfd: false
+  simsed_t0_mode: bolometric_peak
+classes:
+- SNII_NMF_tail
+ngentot_overrides:
+  SNII_NMF_tail: 300
+resources:
+  default:
+    mem: 32G
+    time: 04:00:00
+    cpus: 4
+  overrides: {}
+max_concurrent:
+  default: 2
+partition: general
+keep_phot: true

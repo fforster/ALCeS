@@ -1,0 +1,21 @@
+# Generado por sweep_generate.py (Fase 79) -- no escrito a mano.
+sweep_name: test_SNIINMF
+description: Generado por sweep_generate.py (Fase 79).
+seeds:
+- 0
+modes:
+- wfd: false
+  simsed_t0_mode: bolometric_peak
+classes:
+- SNII-NMF
+ngentot_overrides: {}
+resources:
+  default:
+    mem: 8G
+    time: 00:15:00
+    cpus: 2
+  overrides: {}
+max_concurrent:
+  default: 2
+partition: general
+keep_phot: true

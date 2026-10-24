@@ -1,0 +1,40 @@
+sweep_name: PISNSTELLAHECORE_DDF_40k
+description: PISN-STELLA-HECORE DDF x20, class_pipeline
+seeds:
+- 100
+- 101
+- 102
+- 103
+- 104
+- 105
+- 106
+- 107
+- 108
+- 109
+- 110
+- 111
+- 112
+- 113
+- 114
+- 115
+- 116
+- 117
+- 118
+- 119
+modes:
+- wfd: false
+  simsed_t0_mode: bolometric_peak
+classes:
+- PISN-STELLA-HECORE
+ngentot_overrides:
+  PISN-STELLA-HECORE: 2000
+resources:
+  default:
+    mem: 32G
+    time: 04:00:00
+    cpus: 4
+  overrides: {}
+max_concurrent:
+  default: 6
+partition: general
+keep_phot: true

@@ -1,0 +1,22 @@
+sweep_name: SNIA91BGELASTIC_PILOT_DDF
+description: SNIa-91bg-elastic DDF x2, class_pipeline
+seeds:
+- 900
+- 901
+modes:
+- wfd: false
+  simsed_t0_mode: bolometric_peak
+classes:
+- SNIa-91bg-elastic
+ngentot_overrides:
+  SNIa-91bg-elastic: 2000
+resources:
+  default:
+    mem: 32G
+    time: 04:00:00
+    cpus: 4
+  overrides: {}
+max_concurrent:
+  default: 6
+partition: general
+keep_phot: true

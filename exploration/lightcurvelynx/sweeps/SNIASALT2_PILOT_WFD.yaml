@@ -1,0 +1,22 @@
+sweep_name: SNIASALT2_PILOT_WFD
+description: SNIa-SALT2 WFD--wfd x2, class_pipeline
+seeds:
+- 950
+- 951
+modes:
+- wfd: true
+  simsed_t0_mode: bolometric_peak
+classes:
+- SNIa-SALT2
+ngentot_overrides:
+  SNIa-SALT2: 2000
+resources:
+  default:
+    mem: 32G
+    time: 04:00:00
+    cpus: 4
+  overrides: {}
+max_concurrent:
+  default: 6
+partition: general
+keep_phot: true

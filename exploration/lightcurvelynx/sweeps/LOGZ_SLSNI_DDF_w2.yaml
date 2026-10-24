@@ -1,0 +1,22 @@
+sweep_name: LOGZ_SLSNI_DDF_w2
+description: logz SLSN-I|logz|DDF|w2
+seeds:
+- 21000
+- 21001
+modes:
+- wfd: false
+  simsed_t0_mode: bolometric_peak
+classes:
+- SLSN-I|logz|DDF|w2
+ngentot_overrides:
+  SLSN-I|logz|DDF|w2: 3825
+resources:
+  default:
+    mem: 32G
+    time: 06:00:00
+    cpus: 4
+  overrides: {}
+max_concurrent:
+  default: 9
+partition: general
+keep_phot: true

@@ -1,0 +1,21 @@
+sweep_name: LOGZ_PISNSTELLAHECORE_DDF_w4
+description: logz PISN-STELLA-HECORE|logz|DDF|w4
+seeds:
+- 241000
+modes:
+- wfd: false
+  simsed_t0_mode: bolometric_peak
+classes:
+- PISN-STELLA-HECORE|logz|DDF|w4
+ngentot_overrides:
+  PISN-STELLA-HECORE|logz|DDF|w4: 12
+resources:
+  default:
+    mem: 32G
+    time: 06:00:00
+    cpus: 4
+  overrides: {}
+max_concurrent:
+  default: 9
+partition: general
+keep_phot: true

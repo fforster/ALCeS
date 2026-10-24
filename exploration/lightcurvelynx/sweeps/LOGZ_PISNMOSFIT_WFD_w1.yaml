@@ -1,0 +1,25 @@
+sweep_name: LOGZ_PISNMOSFIT_WFD_w1
+description: logz PISN-MOSFIT|logz|WFD|w1
+seeds:
+- 15000
+- 15001
+- 15002
+- 15003
+- 15004
+modes:
+- wfd: true
+  simsed_t0_mode: bolometric_peak
+classes:
+- PISN-MOSFIT|logz|WFD|w1
+ngentot_overrides:
+  PISN-MOSFIT|logz|WFD|w1: 9573
+resources:
+  default:
+    mem: 32G
+    time: 06:00:00
+    cpus: 4
+  overrides: {}
+max_concurrent:
+  default: 15
+partition: general
+keep_phot: true

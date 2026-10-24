@@ -1,0 +1,22 @@
+# Generado por sweep_generate.py (Fase 79) -- no escrito a mano.
+sweep_name: SNIINMOSFIT_PILOT_DDF
+description: SNIIn-MOSFIT DDF x2, class_pipeline
+seeds:
+- 900
+- 901
+modes:
+- wfd: false
+  simsed_t0_mode: bolometric_peak
+classes:
+- SNIIn-MOSFIT
+ngentot_overrides: {}
+resources:
+  default:
+    mem: 8G
+    time: 00:15:00
+    cpus: 4
+  overrides: {}
+max_concurrent:
+  default: 2
+partition: general
+keep_phot: true

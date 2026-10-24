@@ -1,0 +1,41 @@
+# Generado por sweep_generate.py (Fase 79) -- no escrito a mano.
+sweep_name: SNIINMF_DDF_40k
+description: SNII-NMF DDF 20 x 2000, seeds 100-119, deterministic REDCOR weights,
+  uniform FoV placement
+seeds:
+- 100
+- 101
+- 102
+- 103
+- 104
+- 105
+- 106
+- 107
+- 108
+- 109
+- 110
+- 111
+- 112
+- 113
+- 114
+- 115
+- 116
+- 117
+- 118
+- 119
+modes:
+- wfd: false
+  simsed_t0_mode: bolometric_peak
+classes:
+- SNII-NMF
+ngentot_overrides: {}
+resources:
+  default:
+    mem: 16G
+    time: 01:00:00
+    cpus: 2
+  overrides: {}
+max_concurrent:
+  default: 5
+partition: general
+keep_phot: true

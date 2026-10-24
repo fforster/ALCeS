@@ -1,0 +1,22 @@
+sweep_name: SNIA91BGELASTIC_PILOT_WFD
+description: SNIa-91bg-elastic WFD--wfd x2, class_pipeline
+seeds:
+- 950
+- 951
+modes:
+- wfd: true
+  simsed_t0_mode: bolometric_peak
+classes:
+- SNIa-91bg-elastic
+ngentot_overrides:
+  SNIa-91bg-elastic: 2000
+resources:
+  default:
+    mem: 32G
+    time: 04:00:00
+    cpus: 4
+  overrides: {}
+max_concurrent:
+  default: 6
+partition: general
+keep_phot: true

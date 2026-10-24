@@ -1,0 +1,26 @@
+sweep_name: LOGZ_PISNMOSFIT_DDF_w2
+description: logz PISN-MOSFIT|logz|DDF|w2
+seeds:
+- 21000
+- 21001
+- 21002
+- 21003
+- 21004
+- 21005
+modes:
+- wfd: false
+  simsed_t0_mode: bolometric_peak
+classes:
+- PISN-MOSFIT|logz|DDF|w2
+ngentot_overrides:
+  PISN-MOSFIT|logz|DDF|w2: 4692
+resources:
+  default:
+    mem: 32G
+    time: 06:00:00
+    cpus: 4
+  overrides: {}
+max_concurrent:
+  default: 15
+partition: general
+keep_phot: true

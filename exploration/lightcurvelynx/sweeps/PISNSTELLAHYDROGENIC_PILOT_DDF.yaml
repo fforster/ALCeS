@@ -1,0 +1,22 @@
+sweep_name: PISNSTELLAHYDROGENIC_PILOT_DDF
+description: PISN-STELLA-HYDROGENIC DDF x2, class_pipeline
+seeds:
+- 900
+- 901
+modes:
+- wfd: false
+  simsed_t0_mode: bolometric_peak
+classes:
+- PISN-STELLA-HYDROGENIC
+ngentot_overrides:
+  PISN-STELLA-HYDROGENIC: 2000
+resources:
+  default:
+    mem: 96G
+    time: 08:00:00
+    cpus: 8
+  overrides: {}
+max_concurrent:
+  default: 4
+partition: largemem
+keep_phot: true

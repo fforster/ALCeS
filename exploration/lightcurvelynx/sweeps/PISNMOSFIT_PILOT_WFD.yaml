@@ -1,0 +1,22 @@
+sweep_name: PISNMOSFIT_PILOT_WFD
+description: PISN-MOSFIT WFD--wfd x2, class_pipeline
+seeds:
+- 950
+- 951
+modes:
+- wfd: true
+  simsed_t0_mode: bolometric_peak
+classes:
+- PISN-MOSFIT
+ngentot_overrides:
+  PISN-MOSFIT: 2000
+resources:
+  default:
+    mem: 32G
+    time: 04:00:00
+    cpus: 4
+  overrides: {}
+max_concurrent:
+  default: 6
+partition: general
+keep_phot: true

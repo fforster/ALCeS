@@ -1,0 +1,30 @@
+# Generado por sweep_generate.py (Fase 79) -- no escrito a mano.
+sweep_name: SNIINMF_DDF_x10
+description: SNII-NMF DDF seeds 11-19 (x10 statistics with test_SNIINMF seed 0; seeds
+  distinct from WFD 0-9)
+seeds:
+- 11
+- 12
+- 13
+- 14
+- 15
+- 16
+- 17
+- 18
+- 19
+modes:
+- wfd: false
+  simsed_t0_mode: bolometric_peak
+classes:
+- SNII-NMF
+ngentot_overrides: {}
+resources:
+  default:
+    mem: 16G
+    time: 01:00:00
+    cpus: 2
+  overrides: {}
+max_concurrent:
+  default: 5
+partition: general
+keep_phot: true

@@ -1,0 +1,22 @@
+sweep_name: ILOTMOSFIT_PILOT_WFD
+description: ILOT-MOSFIT WFD--wfd x2, class_pipeline
+seeds:
+- 950
+- 951
+modes:
+- wfd: true
+  simsed_t0_mode: bolometric_peak
+classes:
+- ILOT-MOSFIT
+ngentot_overrides:
+  ILOT-MOSFIT: 2000
+resources:
+  default:
+    mem: 32G
+    time: 04:00:00
+    cpus: 4
+  overrides: {}
+max_concurrent:
+  default: 6
+partition: general
+keep_phot: true

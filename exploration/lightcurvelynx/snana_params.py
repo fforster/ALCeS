@@ -505,6 +505,8 @@ def make_correlated_normal_weights(
     sigmas: dict[str, float],
     redcor: dict[tuple[str, str], float],
     genrange: dict[str, tuple[float, float]] | None = None,
+    cdf_seed: int = 20260813,
+    cdf_eps: float = 1e-7,
 ) -> np.ndarray:
     """Generaliza el peso de `SIMSED_REDCOR` a N parametros (no solo los 2
     de SALT2 c/x1).
@@ -562,7 +564,18 @@ def make_correlated_normal_weights(
     `values`: {nombre_param: array de valores por template}.
     `peaks`/`sigmas`: {nombre_param: GENPEAK/GENSIGMA (simetrica)}.
     `redcor`: {(param_i, param_j): SIMSED_REDCOR(param_i,param_j)} -- solo
-    los pares declarados, el resto se asume no correlacionado (0)."""
+    los pares declarados, el resto se asume no correlacionado (0).
+
+    Fix determinismo (2026-09-24): `scipy.stats.multivariate_normal.cdf` en
+    N>=2 dimensiones integra con quasi-Monte Carlo ALEATORIZADO (Genz) y
+    precision por defecto ~1e-5 -- sin semilla, cada proceso obtenia pesos
+    distintos (ruido ~1e-5 absoluto, varios % relativo en templates chicos).
+    Como el template se samplea con el rng compartido de la simulacion, ~2%
+    de los objetos elegian un template vecino distinto al re-construir la
+    corrida (FLUXTRUE no reproducible). `cdf_seed` fija el QMC (pesos
+    identicos bit a bit en cualquier proceso) y `cdf_eps` (abseps=releps)
+    baja el error de ~3e-2 a ~5e-4 relativo por template (~2.5 min para
+    los 384 templates de SNII-NMF)."""
     from itertools import product as _iproduct
 
     from scipy.stats import multivariate_normal as _mvn
@@ -579,7 +592,7 @@ def make_correlated_normal_weights(
         cov[i, j] = cov[j, i] = rc * sigmas[a] * sigmas[b]
 
     mean = np.array([peaks[n] for n in names])
-    dist = _mvn(mean=mean, cov=cov)
+    dist = _mvn(mean=mean, cov=cov, seed=cdf_seed, abseps=cdf_eps, releps=cdf_eps)
 
     # celda de Voronoi rectangular por eje: bordes en los puntos medios
     # entre valores de grilla adyacentes (unicos, ordenados); extremos

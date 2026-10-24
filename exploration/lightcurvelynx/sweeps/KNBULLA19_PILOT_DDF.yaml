@@ -1,0 +1,22 @@
+sweep_name: KNBULLA19_PILOT_DDF
+description: KN-BULLA19 DDF x2, class_pipeline
+seeds:
+- 900
+- 901
+modes:
+- wfd: false
+  simsed_t0_mode: bolometric_peak
+classes:
+- KN-BULLA19
+ngentot_overrides:
+  KN-BULLA19: 2000
+resources:
+  default:
+    mem: 32G
+    time: 04:00:00
+    cpus: 4
+  overrides: {}
+max_concurrent:
+  default: 6
+partition: general
+keep_phot: true

@@ -44,6 +44,7 @@ Uso (dentro de un job sbatch, nunca en el login node):
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
 import time
@@ -89,6 +90,12 @@ OPSIM_DB = REPO_ROOT / "data/opsim/baseline_v5.3.1_10yrs.db"
 SEARCHEFF_PIPELINE_FILE = SNANA_HOME / "run_SNANA/LSST_SEARCHEFF_PIPELINE.DAT"
 SEARCHEFF_LOGIC_FILE = SNANA_HOME / "run_SNANA/LSST_PIPELINE_LOGIC.DAT"
 PIXSIZE = 0.2
+# Colocacion uniforme en el campo de vision (2026-09-25): cada objeto se ubica uniforme en area dentro
+# del FOV (radio 1.75 deg, el mismo de OpSim/range_search) de una visita elegida al azar, en vez de
+# exactamente en su centro (radius=0.0). El desplazamiento usa el rng compartido que simulate_lightcurves()
+# pasa a sample_parameters() -> reproducible. Densidad de muestreo = proporcional al numero de visitas que
+# cubren cada posicion (no solo en los centros de apuntado: en DDF el dither <=0.2 deg concentraba todo).
+RADEC_SAMPLER_RADIUS_DEG = 1.75
 # Fase 55: copia local versionada de los 6 filtros reales LSST (mismo
 # total_{u,g,r,i,z,y}.dat que descarga PassbandGroup.from_preset("LSST") por
 # defecto) -- solo u.dat difiere, truncado a 413.4nm/4134A, el corte real
@@ -154,8 +161,422 @@ def restlambda_gate_vec(z: np.ndarray, filt: np.ndarray, restlambda_range: tuple
     return (lam_lo / z1 >= rlo) & (lam_hi / z1 <= rhi)
 
 
+# --- SNIa-SALT2 (LSST_sim_lcs 2026-09-30, docs/SNIa_SALT2.md): SALT2 inside the sweep system ------------------------
+# GENMODEL_EXTRAP_LATETIME of SIMGEN_INCLUDE_SNIa-SALT2.INPUT (SNIa_Extrap_LateTime_2expon.TEXT, K. Mandel 2018):
+# columns rest wavelength [A], TAU1 [d], TAU2 [d], EXPRATIO; applied after EXTRAP_DAYMIN rest-frame days.
+SALT2_LATE_DAYMIN = 45.0
+
+# --- common observation window (LSST_sim_lcs 2026-10-07, docs/common_window.md) -------------------------------------
+# The kept photometry of a detected object is [first detection - LC_PRE_DAYS, last detection + LC_POST_DAYS] in
+# OBSERVER-frame days, identical for every class and redshift. The simulation itself covers each class's full model
+# time range plus SIM_MARGIN_REST rest-frame days (>= LC_PRE/POST observer days at any z), so the cut never reaches
+# the simulated span; MODEL_END_REST closes models without a finite end (SALT2 late-time, 56Co tails).
+WINDOW_MODE = "detcut_v1"
+LC_PRE_DAYS = 365.0
+LC_POST_DAYS = 365.0
+SIM_MARGIN_REST = LC_PRE_DAYS + 35.0
+MODEL_END_REST = 1000.0
+
+_sed_template_evaluate = SEDTemplate.evaluate_sed
+
+
+def _evaluate_sed_zero_outside_grid(self, times, wavelengths):
+    """SEDTemplate.evaluate_sed with zero flux outside the template's wavelength grid (no spline extrapolation)."""
+    values = _sed_template_evaluate(self, times, wavelengths)
+    w = np.asarray(wavelengths, dtype=float)
+    out = (w < self.wavelengths[0]) | (w > self.wavelengths[-1])
+    if out.any():
+        values = np.array(values, copy=True)
+        values[:, out] = 0.0
+    return values
+
+
+SEDTemplate.evaluate_sed = _evaluate_sed_zero_outside_grid
+
+
+
+# --- non-transient LCLIB classes (LSST_sim_lcs 2026-10-16, docs/nontransients.md) ------------------------------------
+from lightcurvelynx.models.lightcurve_template_model import LightcurveBandData, MultiLightcurveTemplateModel
+LCLIB_DIR = Path(os.environ.get("ALCES_LCLIB_DIR", str(Path.home() / "lclib_subsets")))   # ~/lclib_full: full libraries
+# A_b / E(B-V) for the LSST bands, R_V = 3.1 (Schlafly & Finkbeiner 2011, Table 6)
+LSST_RB = {"u": 4.145, "g": 3.237, "r": 2.273, "i": 1.684, "z": 1.323, "y": 1.088}
+SURVEY_SPAN_D = 3700.0          # periodic sources: simulate the whole 10-yr survey whatever the phase zero
+LCLIB_TEMPLATE_DAYS = 30.0      # SNANA DAYBACK_TEMPLATE_LCLIB: template = flux average over 30 d (periodic sources)
+# long libraries (ALCES_LCLIB_LONG=1, patch v7): whole-survey AGN, M-dwarf and dwarf-nova light curves
+LCLIB_LONG_KIND = {"LCLIB_AGN-LSST": "drw", "LCLIB_Mdwarf-LSST": "segments", "LCLIB_dwarf-nova-LSST": "recur"}
+LONG_MDW_BLOCK_D = 100.0        # M dwarf: target segment length
+LONG_MDW_QUIET = 0.01           # M dwarf: quiescent = every band within 1% of the quiescent flux
+LONG_DN_CV = 0.4                # dwarf nova: coefficient of variation of the outburst intervals (OGLE-IV photometry)
+LONG_DN_FILE = "dn_recurrence_mroz2015.json"
+
+
+def _long_drw(lc, tau, sf, seed, span):
+    """AGN: Ornstein-Uhlenbeck continuation of the library realisation to [-span-1, span+1] d (daily)."""
+    from lightcurvelynx.astro_utils.mag_flux import flux2mag
+    bands = list(lc.lightcurves)
+    t = lc.lightcurves[bands[0]][:, 0]
+    m = np.column_stack([flux2mag(lc.lightcurves[b][:, 1]) for b in bands])
+    mean = m.mean(axis=0)
+    sfb = np.array([sf[b] for b in bands])
+    z = ((m - mean) / sfb).mean(axis=1)              # one walk in units of SF (bands agree to 1e-3)
+    rng = np.random.default_rng([int(seed), 20261022])
+    a, sig = np.exp(-1.0 / tau), np.sqrt(0.5 * (1.0 - np.exp(-2.0 / tau)))
+
+    def walk(z0, n):                                 # x_k = a x_(k-1) + sig e_k, x_0 = z0
+        from scipy.signal import lfilter
+        return lfilter([sig], [1.0, -a], rng.standard_normal(n), zi=[a * z0])[0]
+    nb, nf = int(np.ceil(t[0] + span + 1)), int(np.ceil(span + 1 - t[-1]))
+    tb, tf = t[0] - np.arange(1, nb + 1), t[-1] + np.arange(1, nf + 1)
+    zb, zf = walk(z[0], nb), walk(z[-1], nf)          # the OU process is time-reversible
+    tt = np.concatenate([tb[::-1], t, tf])
+    new = {}
+    for k, b in enumerate(bands):
+        mb = np.concatenate([(mean[k] + sfb[k] * zb)[::-1], m[:, k], mean[k] + sfb[k] * zf])
+        new[b] = np.column_stack([tt, mag2flux(mb)])
+    return LightcurveBandData(new, 0.0, periodic=False, baseline=dict(lc.baseline))
+
+
+def _long_cuts(lc):
+    """M dwarf: segment boundaries at quiescent epochs, about LONG_MDW_BLOCK_D apart."""
+    bands = list(lc.lightcurves)
+    t = lc.lightcurves[bands[0]][:, 0]
+    tg = np.arange(t[0], t[-1], 0.05)
+    F = np.column_stack([np.interp(tg, lc.lightcurves[b][:, 0], lc.lightcurves[b][:, 1]) for b in bands])
+    quiet = np.all(np.abs(F / np.median(F, axis=0) - 1.0) < LONG_MDW_QUIET, axis=1)
+    cand = tg[quiet]
+    if len(cand) < 2:
+        return np.array([t[0], t[-1]])
+    tgt = np.arange(cand[0], cand[-1] + LONG_MDW_BLOCK_D / 2, LONG_MDW_BLOCK_D)
+    cuts = np.unique(cand[np.clip(np.searchsorted(cand, tgt), 0, len(cand) - 1)])
+    return cuts if len(cuts) >= 2 else np.array([t[0], t[-1]])
+
+
+def _long_map(kind, info, span, t_rel, seed, ind):
+    """Library time (relative to the light curve's lc_data_t0) of each model time t_rel in [-span, span]."""
+    rng = np.random.default_rng([int(seed), int(ind)])
+    lo = -span - 1.0
+    if kind == "segments":
+        cuts = info[ind]
+        seg = np.diff(cuts)
+        k = rng.integers(0, len(seg), size=int(np.ceil((2 * span + 2) / seg.min())) + 1)
+        st = lo + np.concatenate([[0.0], np.cumsum(seg[k])[:-1]])
+        n = int(np.searchsorted(st, span + 1.0)) + 1
+        st, k = st[:n], k[:n]
+        j = np.clip(np.searchsorted(st, t_rel, side="right") - 1, 0, n - 1)
+        return cuts[k[j]] + (t_rel - st[j])
+    trec, dur = info[ind]                               # recur: stationary renewal process of outbursts
+    shape = 1.0 / LONG_DN_CV ** 2
+    scale = trec / shape
+    first = max(rng.gamma(shape + 1.0, scale), dur + 1.0)      # length-biased first interval, uniform phase
+    on = [lo - rng.uniform(0.0, first)]
+    while on[-1] <= span + 1.0:
+        on.append(on[-1] + max(rng.gamma(shape, scale), dur + 1.0))
+    on = np.asarray(on)
+    j = np.clip(np.searchsorted(on, t_rel, side="right") - 1, 0, len(on) - 1)
+    return t_rel - on[j]                                # beyond the outburst: the baseline (quiescent) flux
+
+
+class LCLIBDiffModel(MultiLightcurveTemplateModel):
+    """LCLIB light curves as difference-imaging fluxes: model flux minus the event's template flux, with optional
+    Milky Way extinction (parameter 'ebv', LSST_RB coefficients)."""
+
+    def __init__(self, lightcurves, passbands=None, *, template_flux=None, apply_mw=False, long_map=None, **kwargs):
+        super().__init__(lightcurves, passbands, **kwargs)
+        self._template_flux = template_flux
+        self._apply_mw = apply_mw
+        self._long_map = long_map                   # (kind, info, span) of a long library (patch v7) or None
+
+    def compute_bandflux(self, times, filter, state, **kwargs):
+        params = self.get_local_params(state)
+        ind = int(params["selected_lightcurve"])
+        lc = self.lightcurves[ind]
+        if lc.period is not None:
+            # SNANA (genmag_LCLIB.c magTemplate_LCLIB): flux average over the template epochs of the
+            # DAYBACK_TEMPLATE_LCLIB = 30 d before the search window, at a random phase -> mean flux over 30 d
+            tt = params["template_day"] + np.linspace(0.0, LCLIB_TEMPLATE_DAYS, 61)
+            tmpl = float(np.mean(lc.evaluate_bandfluxes(tt, filter)))
+        else:
+            tmpl = self._template_flux[ind].get(filter, 0.0)       # the library's template (T:) row
+        t_rel = np.asarray(times, float) - params["t0"]
+        if self._long_map is not None and self._long_map[0] != "drw":
+            kind, info, span = self._long_map
+            t_rel = _long_map(kind, info, span, t_rel, params["long_seed"], ind)
+        f = lc.evaluate_bandfluxes(t_rel, filter) - tmpl
+        if self._apply_mw:
+            f = f * 10.0 ** (-0.4 * LSST_RB[filter] * params["ebv"])
+        return f
+
+
+def _dndb_weight(b, kind, coefs):
+    x = np.abs(b) if kind == "BPOLY" else np.cos(np.radians(b))
+    grid = np.arange(0.0, 90.0, 1.0)
+    xg = grid if kind == "BPOLY" else np.cos(np.radians(grid))
+    poly = lambda v: np.clip(sum(c * v ** k for k, c in enumerate(coefs)), 0.0, None)
+    return poly(x) / poly(xg).max()
+
+
+def build_lclib_model(cfg, obs_table, seed_base, t_start, wfd=False):
+    """LCLIBDiffModel for a CLASS_CONFIGS entry with model="lclib" (docs/nontransients.md)."""
+    from lightcurvelynx.utils.io_utils import read_lclib_data
+    from astropy.coordinates import SkyCoord
+    import astropy.units as u
+    tables = read_lclib_data(str(LCLIB_DIR / cfg["lclib"]) + ".TEXT")
+    par = pd.read_parquet(str(LCLIB_DIR / cfg["lclib"]) + ".parquet")
+    assert len(par) == len(tables), (len(par), len(tables))
+    lcs, tmpl, dur = [], [], []
+    for t in tables:
+        if "Y" in t.colnames:
+            t.rename_column("Y", "y")
+        if np.any(np.diff(np.asarray(t["time"], float)) <= 0):   # not time-ordered (PLAsTiCC M-dwarf events)
+            t.sort("time")
+            keep = np.concatenate([[True], np.diff(np.asarray(t["time"], float)) > 0])
+            t = t[keep]
+        lc = LightcurveBandData.from_lclib_table(t)
+        lcs.append(lc)
+        if lc.period is not None:      # periodic: template = first epoch (no T: rows in these libraries)
+            tmpl.append({f: float(v[0, 1]) for f, v in lc.lightcurves.items()})
+        else:                          # non-recurring: template = first T: row (LCL stores it as the baseline)
+            tmpl.append({f: float(lc.baseline.get(f, 0.0)) for f in lc.lightcurves})
+        dur.append(max(float(v[-1, 0]) for v in lc.lightcurves.values()))
+    periodic = all(lc.period is not None for lc in lcs)
+    long_kind = LCLIB_LONG_KIND.get(cfg["lclib"]) if os.environ.get("ALCES_LCLIB_LONG") else None
+    if os.environ.get("ALCES_LCLIB_LONG") and long_kind is None:
+        sys.exit(f"ALCES_LCLIB_LONG: no long version of {cfg['lclib']}")
+    long_map = None
+    if long_kind == "drw":
+        sfc = {"u": "SFU", "g": "SFG", "r": "SFR", "i": "SFI", "z": "SFZ", "y": "SFY"}
+        for k in range(len(lcs)):
+            lcs[k] = _long_drw(lcs[k], float(par["TAU"].iloc[k]), {b: float(par[c].iloc[k]) for b, c in sfc.items()},
+                               par["SEED"].iloc[k], SURVEY_SPAN_D)
+        long_map = (long_kind, None, SURVEY_SPAN_D)
+    elif long_kind == "segments":
+        cuts = [_long_cuts(lc) for lc in lcs]
+        nseg = np.array([len(c) - 1 for c in cuts])
+        long_map = (long_kind, cuts, SURVEY_SPAN_D)
+        print(f"LCLIB long M dwarf: segments per event median {np.median(nseg):.0f}, min {nseg.min()}, "
+              f"events with one segment {int((nseg == 1).sum())}")
+    elif long_kind == "recur":
+        rec = json.loads((LCLIB_DIR / LONG_DN_FILE).read_text())["trec_d"]
+        info = [(float(rec[str(int(o))]), float(max(v[-1, 0] for v in lc.lightcurves.values())))
+                for o, lc in zip(par["OGLE_ID"], lcs)]
+        long_map = (long_kind, info, SURVEY_SPAN_D)
+        print(f"LCLIB long dwarf nova: recurrence {min(i[0] for i in info):.0f}-{max(i[0] for i in info):.0f} d, "
+              f"CV {LONG_DN_CV}")
+    whole = periodic or long_kind is not None
+    span = (-SURVEY_SPAN_D, SURVEY_SPAN_D) if whole else (0.0, float(max(dur)))
+    print(f"[{time.time()-t_start:.1f}s] LCLIB {cfg['lclib']}: {len(lcs)} events, periodic={periodic}, "
+          f"model span {span[0]:.0f}/{span[1]:.0f} d, MW dust {'applied' if cfg['apply_mw'] else 'in the library'}")
+
+    radec_sampler = ObsTableRADECSampler(
+        obs_table, extra_cols=[] if wfd else ["field"], seed=seed_base + 5, radius=RADEC_SAMPLER_RADIUS_DEG,
+    )
+    radec_sampler.setters["selected_table_index"].dependency.set_seed(seed_base + 5)
+
+    def _glat(size=None, ra=None, dec=None, **_kw):
+        return SkyCoord(ra=np.atleast_1d(ra) * u.deg, dec=np.atleast_1d(dec) * u.deg).galactic.b.deg
+
+    glat = SizeAwareFunctionNode(_glat, node_label="glat", ra=radec_sampler.ra, dec=radec_sampler.dec)
+    bcol = "b" if "b" in par else ("GLAT" if "GLAT" in par else None)
+    ev_b = np.abs(par[bcol].to_numpy(float)) if bcol else None     # SNANA matches |b| (keep_ANGLEMATCH_LCLIB)
+    am = par["ANGLEMATCH_b"].to_numpy(float) if "ANGLEMATCH_b" in par else None
+    no_bmatch = bool(os.environ.get("ALCES_LCLIB_NO_BMATCH"))     # every event eligible (EB DDF, docs/nontransients.md)
+    if no_bmatch:
+        print("LCLIB latitude matching OFF (ALCES_LCLIB_NO_BMATCH)")
+    rng_sel = np.random.default_rng(seed_base + 9)
+    bal = json.loads(Path(os.environ["ALCES_LCLIB_BAL"]).read_text()) if os.environ.get("ALCES_LCLIB_BAL") else None
+    if bal is not None:                    # balanced waves: D0 per event in library order
+        d0t = pd.read_parquet(bal["d0_file"]).astype({"event_id": str}).set_index("event_id")
+        d0 = d0t.reindex(par["event_id"].astype(str)).D0.to_numpy(float)
+        b_edges, b_w = np.asarray(bal["edges"], float), np.asarray(bal["weights"], float)
+        print(f"LCLIB balanced: {np.isfinite(d0).sum()}/{len(d0)} events with D0, dust_coef {bal['dust_coef']}, "
+              f"{len(b_w)} bins [{b_edges[0]:.2f}, {b_edges[-1]:.2f}]")
+    sel_cache = {}
+
+    def _event_w(ok, ebv_k):
+        if bal is None:
+            return np.ones(len(ok))
+        D = d0[ok] + bal["dust_coef"] * ebv_k
+        j = np.searchsorted(b_edges, D, side="right") - 1
+        inr = np.isfinite(D) & (j >= 0) & (j < len(b_w))
+        w = np.zeros(len(ok))
+        w[inr] = b_w[j[inr]]
+        return w
+
+    def _select(size=None, glat=None, ebv=None, **_kw):
+        b = np.abs(np.atleast_1d(glat))
+        e = np.broadcast_to(np.atleast_1d(ebv).astype(float), b.shape)
+        out, sw = np.empty(len(b), int), np.ones(len(b))
+        allidx = np.arange(len(lcs))
+        for k, bk in enumerate(b):
+            if ev_b is None or am is None or no_bmatch:
+                ok = allidx
+            else:
+                ok = np.flatnonzero(np.abs(ev_b - bk) <= am)
+                if not len(ok):
+                    ok = np.array([int(np.argmin(np.abs(ev_b - bk)))])
+            w = _event_w(ok, e[k])
+            if w.sum() > 0:
+                c = rng_sel.choice(len(ok), p=w / w.sum())
+                sw[k] = (1.0 / len(ok)) / (w[c] / w.sum())
+            else:
+                c = rng_sel.integers(0, len(ok))
+            out[k] = ok[c]
+        sel_cache["last"] = (out.copy(), sw.copy())
+        return out
+    kind, coefs = cfg["dndb"]
+    dndb = SizeAwareFunctionNode(lambda size=None, glat=None, **_kw: _dndb_weight(np.atleast_1d(glat), kind, coefs),
+                                 node_label="dndb_weight", glat=glat)
+    lo, hi = float(obs_table["time"].min()), float(obs_table["time"].max())
+    if whole and hi - lo > SURVEY_SPAN_D:
+        sys.exit(f"survey longer than SURVEY_SPAN_D: {hi - lo:.0f} d")
+    t0_func = NumpyRandomFunc("uniform", low=lo - (0.0 if whole else float(max(dur))), high=hi, seed=seed_base + 6)
+    if cfg["apply_mw"]:
+        if wfd:
+            ebv_func = SizeAwareFunctionNode(make_wfd_ebv_lookup(WFD_MWEBV_GRID, GENSIGMA_MWEBV_RATIO, seed=seed_base + 10),
+                                             node_label="ebv", ra=radec_sampler.ra, dec=radec_sampler.dec)
+        else:
+            _scatter = make_mwebv_ratio_scatter(GENSIGMA_MWEBV_RATIO, seed=seed_base + 10)
+            ebv_func = SizeAwareFunctionNode(
+                lambda size=None, field=None, **_kw: _scatter(np.array([DDF_FIELD_EBV.get(f, 0.0)
+                                                                       for f in np.atleast_1d(field)])),
+                node_label="ebv", field=radec_sampler.field)
+    else:
+        ebv_func = SizeAwareFunctionNode(lambda size=None, **_kw: np.zeros(size or 1), node_label="ebv")
+    selected = SizeAwareFunctionNode(_select, node_label="lclib_index", glat=glat, ebv=ebv_func)
+    selw = SizeAwareFunctionNode(lambda size=None, lclib_index=None, **_kw: sel_cache["last"][1].copy(),
+                                 node_label="sel_weight", lclib_index=selected)
+    zero = SizeAwareFunctionNode(lambda size=None, **_kw: np.zeros(size or 1), node_label="redshift")
+    model = LCLIBDiffModel(lcs, None, template_flux=tmpl, apply_mw=cfg["apply_mw"], indices=selected,
+                           ra=radec_sampler.ra, dec=radec_sampler.dec, t0=t0_func, redshift=zero, long_map=long_map)
+    if long_map is not None:
+        model.add_parameter("long_seed", NumpyRandomFunc("integers", low=0, high=2 ** 31 - 1, seed=seed_base + 12),
+                            allow_gradient=False)
+    model.add_parameter("template_day", NumpyRandomFunc("uniform", low=0.0, high=1.0e5, seed=seed_base + 11),
+                        allow_gradient=False)          # random start of the 30-d template window (periodic sources)
+    model.add_parameter("ebv", ebv_func, allow_gradient=False)
+    model.add_parameter("glat", glat, allow_gradient=False)
+    model.add_parameter("dndb_weight", dndb, allow_gradient=False)
+    model.add_parameter("sel_weight", selw, allow_gradient=False)
+    model.lclib_bal = (bal, d0 if bal is not None else None)
+    model.lclib_span = span
+    model.lclib_event_id = par["event_id"].astype(str).to_numpy()
+    return model, radec_sampler
+
+
+def lclib_truth(lc, model):
+    """Per-object LCLIB truth columns from the simulated parameters."""
+    flat = _flat_params(lc)
+    ind = np.asarray(_pick_param(flat, "selected_lightcurve"), dtype=int)
+    return pd.DataFrame({"SNID": lc["id"].astype(int).astype(str).to_numpy(), "LCLIB_INDEX": ind,
+                         "LCLIB_EVENT_ID": model.lclib_event_id[ind], "GLAT": _pick_param(flat, "glat"),
+                         "MWEBV": _pick_param(flat, "ebv"), "DNDB_WEIGHT": _pick_param(flat, "dndb_weight"),
+                         **_nt_bal_cols(model, ind, np.asarray(_pick_param(flat, "ebv"), float),
+                                        np.asarray(_pick_param(flat, "sel_weight"), float))})
+
+
+def _nt_bal_cols(model, ind, ebv, sw):
+    """NT_D, NT_BIN and SEL_WEIGHT of the balanced non-transient waves (docs/nontransients.md)."""
+    bal, d0 = model.lclib_bal
+    if bal is None:
+        return {"SEL_WEIGHT": np.ones(len(ind))}
+    D = d0[ind] + bal["dust_coef"] * ebv
+    e = np.asarray(bal["edges"], float)
+    j = np.searchsorted(e, D, side="right") - 1
+    j[~np.isfinite(D) | (j < 0) | (j >= len(e) - 1)] = -1
+    return {"NT_D": D, "NT_BIN": j, "SEL_WEIGHT": sw}
+
+
+def model_rest_span(source_model, cfg):
+    """(first, last) rest-frame day of the class's model relative to t0: SIMSED template grids (all templates);
+    SALT2 from its first phase and tail models to MODEL_END_REST."""
+    if cfg.get("model") == "lclib":
+        return source_model.lclib_span
+    if cfg.get("model") == "salt2":
+        return float(source_model.minphase()), MODEL_END_REST
+    first = min(float(t.times[0]) for t in source_model.templates)
+    last = max(float(t.times[-1]) for t in source_model.templates)
+    return first, (MODEL_END_REST if "tail" in cfg else last)
+SALT2_LATE_TABLE = np.array([[3590, 33.0, 59.9, 1.01], [4380, 57.1, 91.7, 0.30], [5490, 31.0, 84.0, 0.31],
+                             [6520, 28.6, 56.2, 0.35], [8030, 20.6, 84.0, 0.25], [11000, 18.3, 147.0, 0.06],
+                             [12500, 16.9, 100.0, 0.14]])
+
+
+def _salt2_latetime_class():
+    from lightcurvelynx.models.sncosmo_models import SncosmoWrapperModel
+
+    class SALT2LateTimeModel(SncosmoWrapperModel):
+        """SALT2 (sncosmo source) + SNANA's two-exponential late-time extrapolation after 45 rest-frame days:
+        F(t, lam) = F(45, lam) g(t)/g(45), g(t) = exp(-t/tau1) + rho exp(-t/tau2), parameters linear in rest lam.
+        maxphase() is None so the generic time extrapolation of PhysicalModel is not used after the model range."""
+
+        def maxphase(self, **kwargs):
+            return None
+
+        def compute_sed(self, times, wavelengths, graph_state=None, **kwargs):
+            params = self.get_local_params(graph_state)
+            times = np.asarray(times, dtype=float)
+            phase = times - params["t0"]
+            late = phase > SALT2_LATE_DAYMIN
+            flux = np.zeros((len(times), len(wavelengths)))
+            if (~late).any():
+                flux[~late] = super().compute_sed(times[~late], wavelengths, graph_state, **kwargs)
+            if late.any():
+                f45 = super().compute_sed(np.array([params["t0"] + SALT2_LATE_DAYMIN]), wavelengths, graph_state,
+                                          **kwargs)[0]
+                tab = SALT2_LATE_TABLE
+                tau1, tau2, rho = (np.interp(wavelengths, tab[:, 0], tab[:, k]) for k in (1, 2, 3))
+                g = lambda t: np.exp(-t / tau1) + rho * np.exp(-t / tau2)
+                flux[late] = f45[None, :] * g(phase[late][:, None]) / g(SALT2_LATE_DAYMIN)[None, :]
+            return flux
+
+    return SALT2LateTimeModel
+
+
+def build_salt2_model(cfg, seed_base, redshift_func, radec_sampler, t0_func, t_start):
+    """SALT2 source model for a CLASS_CONFIGS entry with model="salt2" (same physics as run_snia_ddf_poc.py)."""
+    import sncosmo
+    from lightcurvelynx.astro_utils.snia_utils import DistModFromRedshift, X0FromDistMod
+    from snana_params import make_bifurcated_normal_sampler, read_salt2_info
+
+    salt2_dir = Path(cfg["salt2_dir"])
+    src = sncosmo.SALT2Source(modeldir=str(salt2_dir), name="salt2-h17-local")
+    c_func = SizeAwareFunctionNode(make_bifurcated_normal_sampler(**cfg["salt2c"], seed=seed_base + 13), node_label="c")
+    x1_func = SizeAwareFunctionNode(make_bifurcated_normal_sampler(**cfg["salt2x1"], seed=seed_base + 14),
+                                    node_label="x1")
+    distmod_func = DistModFromRedshift(redshift_func, H0=70.0, Omega_m=0.315)
+    mag_offset = read_salt2_info(salt2_dir)["MAG_OFFSET"]
+    m_abs_func = NumpyRandomFunc("normal", loc=-19.365 + mag_offset, scale=cfg["sigma_int"], seed=seed_base + 15)
+    x0_func = X0FromDistMod(distmod=distmod_func, x1=x1_func, c=c_func, alpha=cfg["alpha"], beta=cfg["beta"],
+                            m_abs=m_abs_func)
+    model = _salt2_latetime_class()(
+        src, t0=t0_func, x0=x0_func, x1=x1_func, c=c_func,
+        ra=radec_sampler.ra, dec=radec_sampler.dec, redshift=redshift_func,
+        node_label="source", time_extrapolation=ZeroPadding(), wave_extrapolation=ZeroPadding(),
+    )
+    print(f"[{time.time()-t_start:.1f}s] SALT2 (H17 local, MAG_OFFSET {mag_offset}) + late-time 2-exponential "
+          f"extrapolation after {SALT2_LATE_DAYMIN:g} d")
+    return model
+
+
 # --- config por clase, parametros reales de cada SIMGEN_INCLUDE_*.INPUT ---
 CLASS_CONFIGS = {
+    # SNIa-SALT2 (LSST_sim_lcs 2026-09-30, docs/SNIa_SALT2.md): normal SNe Ia in the sweep system, parameters of
+    # run_SNANA/model_config/SIMGEN_INCLUDE_SNIa-SALT2.INPUT (same as run_snia_ddf_poc.py), model built by
+    # build_salt2_model(); RESTLAMBDA_RANGE from SALT2.WFIRST-H17/SALT2.INFO.
+    "SNIa-SALT2": dict(
+        model="salt2",
+        salt2_dir=HERE / "salt2_h17_local",
+        genrange_redshift=(0.011, 1.8),
+        dndz=("powerlaw", [(2.5e-5, 1.5, 0.0, 1.0), (9.7e-5, -0.5, 1.0, 1.8)]),
+        sntype=1,
+        salt2c=dict(peak=-0.054, sigma_lo=0.043, sigma_hi=0.101, lo=-0.3, hi=0.5),
+        salt2x1=dict(peak=0.973, sigma_lo=1.472, sigma_hi=0.222, lo=-3.0, hi=2.0),
+        alpha=0.14,
+        beta=3.1,
+        sigma_int=0.090,
+        trest_range=(-100.0, 300.0),
+        restlambda_range=(2000.0, 23000.0),
+    ),
     # Fase 3: modelo de host extinction real ESSENCE-WV07 (Wood-Vasey+2007),
     # ver make_wv07_av_sampler() en snana_params.py -- reemplaza la omision
     # (AV=0) de las rondas 1-4 de Fase 2B. GENRANGE_AV=0-3 real en las 9
@@ -211,8 +632,8 @@ CLASS_CONFIGS = {
     ),
     "KN-K17": dict(
         simsed_dir=SNANA_HOME / "run_SNANA/plasticc_models/SIMSED.KN-K17",
-        genrange_redshift=(0.011, 0.28),
-        dndz=("powerlaw", [(320e-9, 0.0, 0.011, 0.28)]),
+        genrange_redshift=(0.011, 0.42),
+        dndz=("powerlaw", [(320e-9, 0.0, 0.011, 0.42)]),
         sntype=51,
         host_av=dict(kind="wv07", av_range=(0.0, 3.0), rewgt_expav=0.5, r_v=3.1),
         # Fase 59: GENRANGE_TREST real -100/300 (ver NOTES.md, mismo hueco
@@ -315,6 +736,85 @@ CLASS_CONFIGS = {
         # de Fase 40/43 nunca remedido para esta clase).
         trest_range=(-100.0, 400.0),
     ),
+    # SNII_NMF_tail (2026-09-28, LSST_sim_lcs/docs/SNII_NMF_tail.md): SNII-NMF + parametrized 56Co tail
+    # (snii_tail.SIMSEDTailModel). The SNII-NMF templates stop at +150.5 d from peak; this class continues them
+    # smoothly and adds a nebular tail built from SN 2012aw spectra, scaled by the 56Ni deposition luminosity
+    # with per-object m_ni and gamma-ray trapping time t0_trap. Priors from docs/snii_tail_literature_review.md.
+    "SNII_NMF_tail": dict(
+        simsed_dir=SNANA_HOME / "run_SNANA/plasticc_models/SIMSED.SNII-NMF",
+        genrange_redshift=(0.011, 1.0),
+        dndz=("ccs15", 0.162),
+        sntype=42,
+        redcor_params=dict(
+            peaks=dict(pc1=0.0854, pc2=0.0199, pc3=0.0250),
+            sigmas=dict(pc1=0.075, pc2=0.021, pc3=0.017),
+            redcor={("pc1", "pc2"): 0.241, ("pc1", "pc3"): 0.052, ("pc2", "pc3"): -0.074},
+        ),
+        trest_range=(-100.0, 600.0),     # tail observable to ~600 rest-frame days (SNII-NMF: 400)
+        tail=dict(
+            template="snii_tail/sn2012aw_nebular_template.npz",
+            cap=False,   # v4 (2026-09-29, user): no tail-brightness cap
+            # v5 (2026-09-29, user): 56Ni masses follow Rodriguez+21 (quantile-mapped from the plateau relation)
+            m_ni_map=dict(source=(-1.6276, 0.3136), target=(-1.50, 0.35), bounds=(0.001, 0.3)),   # v6: was (0.005, 0.18) (pile-up at the bounds)
+            # v2: 56Ni tied to the template plateau, log10 M_Ni = -7.708 - 0.3755 M_V(50 d) + m_ni_dex
+            # (Rodriguez+21 eq. 29, scatter 0.21 dex); M_Ni bounded to 0.001-0.3 Msun in snii_tail.py.
+            # (v1 independent prior, for reference: m_ni=("lognormal", 0.0324, 0.806, 0.004, 0.2))
+            m_ni_dex=("normal", 0.0, 0.21, -0.63, 0.63),
+            # 70% ~full trapping (T0 400-1000 d, Sharon & Kushnir 2020); 30% leaking, log-normal around 200 d
+            # (0.18 dex, clipped 85-550 d; Rodriguez+21 median 222 d)
+            t0_trap=("mixture", [(0.7, ("uniform", 400.0, 1000.0)), (0.3, ("lognormal", 200.0, 0.414, 85.0, 550.0))]),
+        ),
+    ),
+    # SNII_NMF_tail_lowz: SNII_NMF_tail restricted to z <= 0.3 (tail statistics), 2026-09-29
+    "SNII_NMF_tail_lowz": dict(
+        simsed_dir=SNANA_HOME / "run_SNANA/plasticc_models/SIMSED.SNII-NMF",
+        genrange_redshift=(0.011, 0.3),   # tails undetectable beyond z ~ 0.25-0.3
+        dndz=("ccs15", 0.162),
+        sntype=42,
+        redcor_params=dict(
+            peaks=dict(pc1=0.0854, pc2=0.0199, pc3=0.0250),
+            sigmas=dict(pc1=0.075, pc2=0.021, pc3=0.017),
+            redcor={("pc1", "pc2"): 0.241, ("pc1", "pc3"): 0.052, ("pc2", "pc3"): -0.074},
+        ),
+        trest_range=(-100.0, 600.0),     # tail observable to ~600 rest-frame days (SNII-NMF: 400)
+        tail=dict(
+            template="snii_tail/sn2012aw_nebular_template.npz",
+            cap=False,   # v4 (2026-09-29, user): no tail-brightness cap
+            # v5 (2026-09-29, user): 56Ni masses follow Rodriguez+21 (quantile-mapped from the plateau relation)
+            m_ni_map=dict(source=(-1.6276, 0.3136), target=(-1.50, 0.35), bounds=(0.001, 0.3)),   # v6: was (0.005, 0.18) (pile-up at the bounds)
+            # v2: 56Ni tied to the template plateau, log10 M_Ni = -7.708 - 0.3755 M_V(50 d) + m_ni_dex
+            # (Rodriguez+21 eq. 29, scatter 0.21 dex); M_Ni bounded to 0.001-0.3 Msun in snii_tail.py.
+            # (v1 independent prior, for reference: m_ni=("lognormal", 0.0324, 0.806, 0.004, 0.2))
+            m_ni_dex=("normal", 0.0, 0.21, -0.63, 0.63),
+            # 70% ~full trapping (T0 400-1000 d, Sharon & Kushnir 2020); 30% leaking, log-normal around 200 d
+            # (0.18 dex, clipped 85-550 d; Rodriguez+21 median 222 d)
+            t0_trap=("mixture", [(0.7, ("uniform", 400.0, 1000.0)), (0.3, ("lognormal", 200.0, 0.414, 85.0, 550.0))]),
+        ),
+    ),
+    # SNII_NMF_tail_div (2026-09-28): tail-luminosity diversity experiment = SNII_NMF_tail with m_ni_dex uniform
+    # in [-1, +1] dex and z <= 0.3 (see LSST_sim_lcs/docs/SNII_NMF_tail.md, section 11).
+    "SNII_NMF_tail_div": dict(
+        simsed_dir=SNANA_HOME / "run_SNANA/plasticc_models/SIMSED.SNII-NMF",
+        genrange_redshift=(0.011, 0.3),   # experiment: tails only observable at low z
+        dndz=("ccs15", 0.162),
+        sntype=42,
+        redcor_params=dict(
+            peaks=dict(pc1=0.0854, pc2=0.0199, pc3=0.0250),
+            sigmas=dict(pc1=0.075, pc2=0.021, pc3=0.017),
+            redcor={("pc1", "pc2"): 0.241, ("pc1", "pc3"): 0.052, ("pc2", "pc3"): -0.074},
+        ),
+        trest_range=(-100.0, 600.0),     # tail observable to ~600 rest-frame days (SNII-NMF: 400)
+        tail=dict(
+            template="snii_tail/sn2012aw_nebular_template.npz",
+            # v2: 56Ni tied to the template plateau, log10 M_Ni = -7.708 - 0.3755 M_V(50 d) + m_ni_dex
+            # (Rodriguez+21 eq. 29, scatter 0.21 dex); M_Ni bounded to 0.001-0.3 Msun in snii_tail.py.
+            # (v1 independent prior, for reference: m_ni=("lognormal", 0.0324, 0.806, 0.004, 0.2))
+            m_ni_dex=("uniform", -1.0, 1.0),   # experiment: tail luminosity diversity, +-1 dex about the relation
+            # 70% ~full trapping (T0 400-1000 d, Sharon & Kushnir 2020); 30% leaking, log-normal around 200 d
+            # (0.18 dex, clipped 85-550 d; Rodriguez+21 median 222 d)
+            t0_trap=("mixture", [(0.7, ("uniform", 400.0, 1000.0)), (0.3, ("lognormal", 200.0, 0.414, 85.0, 550.0))]),
+        ),
+    ),
     # Fase 2B ronda 3: 3 clases SIMSED que declaran WV07 real (confirmado
     # `GENAV_WV07: 1` en su .INPUT, no el camino GENPROFILE_AV de SNIax).
     # ILOT-MOSFIT y SNIIn-MOSFIT reusan DNDZ: CC_S15 (ya validado en
@@ -322,7 +822,7 @@ CLASS_CONFIGS = {
     # extinction real agregada en Fase 3, ver comentario arriba.
     "ILOT-MOSFIT": dict(
         simsed_dir=SNANA_HOME / "run_SNANA/plasticc_models/SIMSED.ILOT-MOSFIT",
-        genrange_redshift=(0.011, 0.30),
+        genrange_redshift=(0.011, 0.45),
         dndz=("ccs15", 0.06),
         sntype=61,
         host_av=dict(kind="wv07", av_range=(0.0, 3.0), rewgt_expav=None, r_v=3.1),
@@ -331,6 +831,17 @@ CLASS_CONFIGS = {
         # solo 11.8% de esa ventana ("Intermediate Luminosity Optical
         # Transient", evolucion mas lenta que una SN estandar).
         trest_range=(-100.0, 1000.0),
+    ),
+    # SNIbc-MOSFIT (LSST_sim_lcs 2026-10-06): MOSFIT SNe Ib/c (Guillochon & Villar), no SNANA SIMGEN_INCLUDE uses it,
+    # settings chosen in LSST_sim_lcs/tools/snibc/patch_alces_snibc.py (rate from SED.INFO, window/dust as SNIIn-MOSFIT).
+    "SNIbc-MOSFIT": dict(
+        simsed_dir=SNANA_HOME / "run_SNANA/plasticc_models/SIMSED.SNIbc-MOSFIT",
+        genrange_redshift=(0.011, 1.0),
+        dndz=("md14", 1.5e-5),
+        sntype=62,
+        host_av=dict(kind="wv07", av_range=(0.0, 3.0), rewgt_expav=None, r_v=3.1),
+        restlambda_range=(1000.0, 11000.0),
+        trest_range=(-50.0, 300.0),
     ),
     "SNIIn-MOSFIT": dict(
         simsed_dir=SNANA_HOME / "run_SNANA/plasticc_models/SIMSED.SNIIn-MOSFIT",
@@ -374,8 +885,8 @@ CLASS_CONFIGS = {
         # (SED.INFO no necesita fix, ya parsea limpio). Archivo real no
         # tocado.
         simsed_dir=HERE / "simsed_knbulla19_local",
-        genrange_redshift=(0.011, 0.28),
-        dndz=("powerlaw", [(320e-9, 0.0, 0.011, 0.28)]),  # identico a KN-K17
+        genrange_redshift=(0.011, 0.42),
+        dndz=("powerlaw", [(320e-9, 0.0, 0.011, 0.42)]),  # identico a KN-K17
         sntype=52,
         host_av=dict(kind="wv07", av_range=(0.0, 3.0), rewgt_expav=0.5, r_v=3.1),
         # Fase 59: GENRANGE_TREST real -100/500 (ver NOTES.md, mismo hueco
@@ -388,7 +899,7 @@ CLASS_CONFIGS = {
         # vendor_snana_class.py, NOTES.md Fase 75). Antes leía directo de
         # SNANA_HOME / "run_SNANA/elastic/...", solo disponible en NLHPC.
         simsed_dir=HERE / "simsed_pisnstellahecore_local",
-        genrange_redshift=(0.02, 2.2),
+        genrange_redshift=(0.02, 3.3),
         dndz=("pisn", 1.0),
         sntype=71,
         host_av=dict(kind="wv07", av_range=(0.0, 3.0), rewgt_expav=None, r_v=3.1),
@@ -398,7 +909,7 @@ CLASS_CONFIGS = {
     ),
     "PISN-STELLA-HYDROGENIC": dict(
         simsed_dir=SNANA_HOME / "run_SNANA/elastic/model_libs_updates/SIMSED.PISN-STELLA-HYDROGENIC",
-        genrange_redshift=(0.02, 2.2),
+        genrange_redshift=(0.02, 3.3),
         dndz=("pisn", 1.0),
         sntype=72,
         # unica clase del catalogo con ngen_ddf != 2000 (pipeline/models.yaml:
@@ -412,6 +923,116 @@ CLASS_CONFIGS = {
         trest_range=(-50.0, 300.0),
     ),
 }
+
+
+_PL_B = ("BPOLY", [20383, -1757.7, 65.293, -1.1885, 0.10405e-01, -0.35119e-04])   # PLAsTiCC Galactic classes
+_EL_B = ("BPOLY", [1.001, -5.55555556e-02, 1.23456790e-03, -1.37174211e-05, 7.62078951e-08, -1.69350878e-10])
+for _name, _lib, _dndb, _mw, _type in [
+        ("AGN", "LCLIB_AGN-LSST", ("COSBPOLY", [1.0]), True, 80),
+        ("RRL", "LCLIB_RRL-LSST", _PL_B, True, 81),
+        ("Mira", "LCLIB_MIRA_ISW2011", _PL_B, True, 82),
+        ("EB", "LCLIB_EB-PHOEBE", _PL_B, True, 83),
+        ("Mdwarf", "LCLIB_Mdwarf-LSST", ("COSBPOLY", [0.1, 1.0, 1.0, 1.0]), True, 84),
+        ("uLens-Binary", "LCLIB_uLens-Binary", _PL_B, True, 85),
+        ("uLens-GenLens", "LCLIB_uLens-Single-GenLens", _PL_B, True, 86),
+        ("uLens-PyLIMA", "LCLIB_uLens-Single-PyLIMA", _PL_B, True, 87),
+        ("uLens-String", "LCLIB_uLens-String", _PL_B, True, 88),     # no SNANA include: PLAsTiCC uLens density
+        ("Cepheid", "LCLIB_Cepheid-LSST", _EL_B, False, 89),
+        ("dSct", "LCLIB_d-Sct-LSST", _EL_B, False, 90),
+        ("DwarfNova", "LCLIB_dwarf-nova-LSST", _EL_B, False, 91),
+        ("Mdwarf-flare", "LCLIB_Mdwarf-flare-LSST", ("BPOLY", [-3.28230212e-03, 3.01446333e-02, -4.65144034e-03,
+            3.16808686e-04, -1.20480381e-05, 2.76898385e-07, -3.92467157e-09, 3.34750950e-11, -1.57113870e-13,
+            3.10724077e-16]), False, 92)]:
+    CLASS_CONFIGS[_name] = dict(model="lclib", lclib=_lib, dndb=_dndb, apply_mw=_mw, sntype=_type,
+                                genrange_redshift=(0.0, 0.0), dndz=("none", 0.0))
+
+
+for _c in CLASS_CONFIGS.values():          # common observation window (docs/common_window.md)
+    _c.pop("trest_range", None)
+    _c.pop("restlambda_range", None)
+    _c["window"] = WINDOW_MODE
+
+
+# --- flat-log-z mode (LSST_sim_lcs 2026-10-05, docs/logz_flat_mode.md) ---------------------------------------------
+# Derived classes "<base>|logz|<DDF|WFD>|w<k>" from logz_configs.json (written by LSST_sim_lcs/tools/logz/plan_wave.py).
+# Each is the base config with a piecewise log-z generation density, the class-mode redshift range, detected-only
+# photometry plus gen_df.parquet (all generated objects), and WV07 host extinction when asked for and absent in the base.
+LOGZ_CONFIGS_FILE = HERE / "logz_configs.json"
+LOGZ_HOST_AV = dict(kind="wv07", av_range=(0.0, 3.0), rewgt_expav=None, r_v=3.1)
+
+
+def _load_logz_configs():
+    if not LOGZ_CONFIGS_FILE.exists():
+        return
+    for key, e in json.loads(LOGZ_CONFIGS_FILE.read_text()).items():
+        base = CLASS_CONFIGS[e["base"]]
+        cfg = {**base, "dndz": ("logz_piecewise", {"edges": list(e["edges"]), "weights": list(e["weights"])}),
+               "genrange_redshift": (float(e["edges"][0]), float(e["edges"][-1])), "keep_detected_only": True,
+               "logz": {"base": e["base"], "mode": e["mode"], "wave": int(e["wave"])}}
+        if e.get("add_host_dust") and "host_av" not in base:
+            cfg["host_av"] = dict(LOGZ_HOST_AV)
+        CLASS_CONFIGS[key] = cfg
+
+
+_load_logz_configs()
+
+
+def _flat_params(lc):
+    """Leaf arrays of the per-object parameter struct returned by simulate_lightcurves (lc["params"]), keyed
+    "node.param" (same naming as GraphState.to_dict())."""
+    import pyarrow as pa
+    arr = lc["params"].array
+    pa_arr = getattr(arr, "_pa_array", None)
+    pa_arr = pa.array(arr) if pa_arr is None else pa_arr
+    if isinstance(pa_arr, pa.ChunkedArray):
+        pa_arr = pa_arr.combine_chunks()
+    out = {}
+
+    def walk(a, prefix):
+        if pa.types.is_struct(a.type):
+            for i, f in enumerate(a.type):
+                walk(a.field(i), f"{prefix}.{f.name}" if prefix else f.name)
+        else:
+            try:
+                out[prefix] = a.to_numpy(zero_copy_only=False)
+            except Exception:  # noqa: BLE001 -- non-numeric leaves are not needed
+                pass
+
+    walk(pa_arr, "")
+    return out
+
+
+def _pick_param(flat, *names):
+    for name in names:
+        for k, v in flat.items():
+            if k == name or k.endswith("." + name):
+                return v
+    return None
+
+
+def logz_gen_df(lc, cfg, detected_snids):
+    """All generated objects of a flat-log-z run: redshift, attenuation (MW and host) and detection flag."""
+    flat = _flat_params(lc)
+    n = len(lc)
+    nan = np.full(n, np.nan)
+    hp = cfg.get("host_av")
+    gen = pd.DataFrame({
+        "SNID": lc["id"].astype(int).astype(str).to_numpy(), "REDSHIFT_HELIO": lc["z"].to_numpy(),
+        "PEAKMJD": lc["t0"].to_numpy(), "RA": lc["ra"].to_numpy(), "DEC": lc["dec"].to_numpy(),
+        "NOBS": lc["nobs"].to_numpy() if "nobs" in lc else nan,
+        "MWEBV": _pick_param(flat, "ebv.function_node_result"),
+        "HOST_AV": _pick_param(flat, "host_av.function_node_result") if hp else np.zeros(n),
+        "HOST_RV": np.full(n, hp["r_v"]) if hp else nan,
+        "SALT2_x1": _pick_param(flat, "x1.function_node_result"),
+        "SALT2_c": _pick_param(flat, "c.function_node_result"),
+    })
+    for col in ("MWEBV", "SALT2_x1", "SALT2_c"):
+        if gen[col].isna().all() and not (col.startswith("SALT2") and cfg.get("model") != "salt2"):
+            print(f"  ! logz gen_df: {col} not found among {sorted(flat)[:40]}")
+    if hp and gen["HOST_AV"].isna().all():
+        print(f"  ! logz gen_df: HOST_AV not found among {sorted(flat)[:40]}")
+    gen["DETECTED"] = gen["SNID"].isin(set(detected_snids))
+    return gen
 
 
 def snana_noise_columns(df_ddf: pd.DataFrame) -> pd.DataFrame:
@@ -577,9 +1198,14 @@ def build_source_model(cfg: dict, obs_table: OpSim, seed_base: int, t_start: flo
     lo pasa como "bolometric_peak" por defecto: un piloto real (`CaRT`, la
     clase con mayor shift del catalogo) midio impacto minimo en deteccion, ver
     NOTES.md Fase 57."""
-    simsed_dir = cfg["simsed_dir"]
-    file_names, _ = SIMSEDModel._read_simsed_info_file(simsed_dir)
-    if "redcor_params" in cfg:
+    if cfg.get("model") == "lclib":                 # non-transient LCLIB classes (docs/nontransients.md)
+        return build_lclib_model(cfg, obs_table, seed_base, t_start, wfd=wfd)
+    is_salt2 = cfg.get("model") == "salt2"          # SNIa-SALT2: no SIMSED templates (build_salt2_model)
+    simsed_dir = cfg.get("simsed_dir")
+    file_names = [] if is_salt2 else SIMSEDModel._read_simsed_info_file(simsed_dir)[0]
+    if is_salt2:
+        weights = None
+    elif "redcor_params" in cfg:
         # peso real via bivariada/multivariada normal correlacionada
         # (SIMSED_REDCOR), no uniforme -- parsear los valores propios de
         # cada template desde SED.INFO (mismo orden que PARNAMES).
@@ -625,6 +1251,13 @@ def build_source_model(cfg: dict, obs_table: OpSim, seed_base: int, t_start: flo
         z_grid, cdf = build_dndz_tde_cdf(rate0=dndz_params, z_min=z_min, z_max=z_max)
     elif dndz_kind == "pisn":
         z_grid, cdf = build_dndz_pisn_cdf(scale=dndz_params, z_min=z_min, z_max=z_max)
+    elif dndz_kind == "logz_piecewise":
+        # flat-log-z mode: density piecewise constant in ln z with the given per-bin weights; CDF on a fine ln-z grid
+        e = np.asarray(dndz_params["edges"], dtype=float)
+        wts = np.asarray(dndz_params["weights"], dtype=float) + 1e-12      # strictly increasing CDF
+        cdf_e = np.concatenate([[0.0], np.cumsum(wts)]) / wts.sum()
+        lnz = np.linspace(np.log(e[0]), np.log(e[-1]), 40001)
+        z_grid, cdf = np.exp(lnz), np.interp(lnz, np.log(e), cdf_e)
     else:
         raise ValueError(f"dndz_kind desconocido: {dndz_kind}")
     redshift_func = SizeAwareFunctionNode(make_dndz_sampler(z_grid, cdf, seed=seed_base + 1), node_label="redshift")
@@ -637,7 +1270,7 @@ def build_source_model(cfg: dict, obs_table: OpSim, seed_base: int, t_start: flo
     # Fase 17: "field" solo existe para DDF (6 pointings fijos) -- WFD no
     # tiene esa columna, asi que no se pide como extra_cols.
     radec_sampler = ObsTableRADECSampler(
-        obs_table, extra_cols=[] if wfd else ["field"], seed=seed_base + 5, radius=0.0,
+        obs_table, extra_cols=[] if wfd else ["field"], seed=seed_base + 5, radius=RADEC_SAMPLER_RADIUS_DEG,
     )
     # Segundo bug de la libreria, mas profundo: TableSampler.__init__
     # (clase base de ObsTableRADECSampler) crea su propio muestreador de
@@ -697,14 +1330,37 @@ def build_source_model(cfg: dict, obs_table: OpSim, seed_base: int, t_start: flo
         extinction_model="F99", ebv=ebv_func, r_v=MW_RV, frame="observer", backend="dust_extinction",
     )
 
-    if simsed_t0_mode == "bolometric_peak":
+    if is_salt2:
+        source_model = build_salt2_model(cfg, seed_base, redshift_func, radec_sampler, t0_func, t_start)
+    elif simsed_t0_mode == "bolometric_peak":
         templates, flux_scale = load_simsed_templates_bolometric(simsed_dir)
-        source_model = SIMSEDModel(
-            templates, flux_scale=flux_scale, weights=weights,
-            ra=radec_sampler.ra, dec=radec_sampler.dec,
-            redshift=redshift_func, distance=distance_func, t0=t0_func,
-        )
+        if "tail" in cfg:
+            # SNII_NMF_tail: SIMSEDModel + template continuation + parametrized 56Co tail (snii_tail.py)
+            from snii_tail import SIMSEDTailModel, make_tail_sampler
+            tail_cfg = cfg["tail"]
+            ni_key = "m_ni_dex" if "m_ni_dex" in tail_cfg else "m_ni"
+            ni_func = SizeAwareFunctionNode(make_tail_sampler(tail_cfg[ni_key], seed_base + 11), node_label=ni_key)
+            t0_trap_func = SizeAwareFunctionNode(make_tail_sampler(tail_cfg["t0_trap"], seed_base + 12),
+                                                 node_label="t0_trap")
+            source_model = SIMSEDTailModel(
+                templates, flux_scale=flux_scale, weights=weights,
+                t0_trap=t0_trap_func, tail_template=HERE / tail_cfg["template"], **{ni_key: ni_func},
+                tail_cap=tail_cfg.get("cap", True),
+                m_ni_map=tail_cfg.get("m_ni_map"),
+                ra=radec_sampler.ra, dec=radec_sampler.dec,
+                redshift=redshift_func, distance=distance_func, t0=t0_func,
+            )
+            print(f"[{time.time()-t_start:.1f}s] SIMSEDTailModel: {ni_key} {tail_cfg[ni_key]}, "
+                  f"t0_trap {tail_cfg['t0_trap']}")
+        else:
+            source_model = SIMSEDModel(
+                templates, flux_scale=flux_scale, weights=weights,
+                ra=radec_sampler.ra, dec=radec_sampler.dec,
+                redshift=redshift_func, distance=distance_func, t0=t0_func,
+            )
     else:
+        if "tail" in cfg:
+            raise ValueError("tail classes (SNII_NMF_tail) require simsed_t0_mode='bolometric_peak'")
         source_model = SIMSEDModel.from_dir(
             simsed_dir, weights=weights,
             ra=radec_sampler.ra, dec=radec_sampler.dec,
@@ -719,7 +1375,8 @@ def build_source_model(cfg: dict, obs_table: OpSim, seed_base: int, t_start: flo
     # ninguna ronda anterior de Fase 2B/3, pese a SEED_BASE. Fijar el seed
     # aqui para que corridas futuras sean reproducibles -- no se re-corrio
     # el catalogo completo de nuevo solo por esto (ver NOTES.md Fase 4).
-    source_model._sampler_node.set_seed(seed_base + 9)
+    if not is_salt2:
+        source_model._sampler_node.set_seed(seed_base + 9)
     source_model.add_effect(mw_extinction)
 
     if "host_av" in cfg:
@@ -786,7 +1443,8 @@ def build_source_model(cfg: dict, obs_table: OpSim, seed_base: int, t_start: flo
             print(f"[{time.time()-t_start:.1f}s] extincion de host real aplicada "
                   f"(kind={kind}, {av_desc}, R_V={hp['r_v']})")
 
-    print(f"[{time.time()-t_start:.1f}s] SIMSEDModel cargado ({len(source_model)} templates)")
+    print(f"[{time.time()-t_start:.1f}s] " + ("SALT2 model cargado" if is_salt2 else
+                                                f"SIMSEDModel cargado ({len(source_model)} templates)"))
 
     return source_model, radec_sampler
 
@@ -804,6 +1462,8 @@ def main(class_key: str, ngentot_override: int | None = None, seed_index: int = 
     # mantiene su propio default "raw" (sin cambios) -- este override es
     # especifico de main()/produccion, ver NOTES.md Fase 57.
     cfg = CLASS_CONFIGS[class_key]
+    if cfg.get("logz") and (cfg["logz"]["mode"] == "WFD") != bool(wfd):
+        raise ValueError(f"{class_key}: flat-log-z class for {cfg['logz']['mode']} run with wfd={wfd}")
     # la mayoria de las clases DDF usan NGENTOT_LC=2000 (pipeline/models.yaml:
     # ngen_ddf), pero PISN-STELLA-HYDROGENIC es la excepcion real (ngen_ddf:
     # 20000) -- cfg["ngentot_lc"] la overridea; ngentot_override (usado por
@@ -877,7 +1537,11 @@ def main(class_key: str, ngentot_override: int | None = None, seed_index: int = 
     # de -50/300 a -100/1000 -- ver NOTES.md Fase 40/43). Default (-30,100)
     # para las clases que no declaran trest_range explicito en CLASS_CONFIGS
     # (no re-medidas en esta fase, ver NOTES.md Fase 43 para el alcance).
-    trest_range = cfg.get("trest_range", (-30.0, 100.0))
+    model_span = model_rest_span(source_model, cfg)
+    trest_range = (model_span[0] - SIM_MARGIN_REST, model_span[1] + SIM_MARGIN_REST)   # internal span (common window)
+    print(f"[{time.time()-t_start:.1f}s] common window {WINDOW_MODE}: model {model_span[0]:.0f}/{model_span[1]:.0f} d "
+          f"rest -> simulated {trest_range[0]:.0f}/{trest_range[1]:.0f} d rest; kept: first detection - "
+          f"{LC_PRE_DAYS:g} d to last detection + {LC_POST_DAYS:g} d (observer frame)")
     lc = simulate_lightcurves(source_model, ngentot, survey_info=SurveyInfo(
         obstable=obs_table, passbands=passband_group, survey_name="LSST",
     ), rest_time_window_offset=trest_range, rng=np.random.default_rng(seed_base + 2))
@@ -892,7 +1556,7 @@ def main(class_key: str, ngentot_override: int | None = None, seed_index: int = 
     # defecto seguia devolviendo un flujo extrapolado/clampeado no-cero via
     # RectBivariateSpline sin ningun chequeo de rango de longitud de onda,
     # confirmado leyendo SEDTemplate.evaluate_sed() -- ver NOTES.md).
-    restlambda_range = cfg.get("restlambda_range")
+    restlambda_range = None        # common window: no per-class band cuts (zero flux outside each SED grid instead)
     n_gated_total = 0
 
     # Fase 59-perf: aplanado vectorizado (antes: doble iterrows anidado --
@@ -985,6 +1649,25 @@ def main(class_key: str, ngentot_override: int | None = None, seed_index: int = 
     print(f"[{time.time()-t_start:.1f}s] SEARCHEFF aplicado: {len(detected_snids)}/{len(head_df)} "
           f"objetos detectados (>= {min_epochs} epocas reales, agrupadas)")
 
+    # common observation window: [first detection - LC_PRE_DAYS, last detection + LC_POST_DAYS] observer days
+    det_mjd = phot_df.loc[phot_df["PHOTFLAG"] == 4096].groupby("SNID")["MJD"]
+    lc_lo = (det_mjd.min() - LC_PRE_DAYS).reindex(list(detected_snids))
+    lc_hi = (det_mjd.max() + LC_POST_DAYS).reindex(list(detected_snids))
+    keep = (phot_df["SNID"].isin(detected_snids) & (phot_df["MJD"] >= phot_df["SNID"].map(lc_lo))
+            & (phot_df["MJD"] <= phot_df["SNID"].map(lc_hi)))
+    n_rows_before = len(phot_df)
+    phot_df = phot_df[keep].reset_index(drop=True)
+    head_df["LC_MJD_START"] = head_df["SNID"].map(lc_lo)
+    head_df["LC_MJD_END"] = head_df["SNID"].map(lc_hi)
+    z1 = 1.0 + head_df["REDSHIFT_HELIO"]
+    head_df["SIMWIN_TRUNC"] = ((head_df["LC_MJD_START"] < head_df["PEAKMJD"] + trest_range[0] * z1)
+                               | (head_df["LC_MJD_END"] > head_df["PEAKMJD"] + trest_range[1] * z1))
+    head_df["NOBS"] = head_df["SNID"].map(phot_df.groupby("SNID").size()).fillna(0).astype(int)
+    n_trunc = int(head_df["SIMWIN_TRUNC"].sum())
+    print(f"[{time.time()-t_start:.1f}s] common window: kept {len(phot_df):,} of {n_rows_before:,} rows "
+          f"({len(detected_snids)} detected objects); cut reaching the simulated span: {n_trunc}"
+          + ("  <-- WARNING" if n_trunc else ""))
+
     all_ids = lc["id"].astype(int).astype(str)
     dump_df = pd.DataFrame({"CID": all_ids, "ZHELIO": lc["z"].to_numpy(), "ZCMB": lc["z"].to_numpy()})
     head_df_detected = head_df[head_df["SNID"].isin(detected_snids)].reset_index(drop=True)
@@ -998,8 +1681,20 @@ def main(class_key: str, ngentot_override: int | None = None, seed_index: int = 
     # tener millones de filas para NGENTOT completo. No se versiona en git
     # (ver .gitignore), solo vive en el output dir de NLHPC/local.
     head_df["DETECTED"] = head_df["SNID"].isin(detected_snids)
+    if cfg.get("model") == "lclib":
+        head_df = head_df.merge(lclib_truth(lc, source_model), on="SNID", how="left")
+    if cfg.get("keep_detected_only"):
+        # flat-log-z mode: all generated objects (z, attenuation, detection) in gen_df; photometry of detected only
+        gen_df = logz_gen_df(lc, cfg, detected_snids)
+        gen_df.to_parquet(out_dir / "gen_df.parquet", index=False)
+        extra = gen_df[["SNID", "MWEBV", "HOST_AV", "HOST_RV", "SALT2_x1", "SALT2_c"]]
+        head_df = head_df[head_df["DETECTED"]].merge(extra, on="SNID", how="left").reset_index(drop=True)
+        phot_df = phot_df[phot_df["SNID"].isin(set(detected_snids))].reset_index(drop=True)
+        print(f"[{time.time()-t_start:.1f}s] logz: gen_df.parquet ({len(gen_df)} generated, "
+              f"{int(gen_df.DETECTED.sum())} detected); head/phot restricted to detected")
     head_df.to_parquet(out_dir / "head_df.parquet", index=False)
-    phot_df.to_parquet(out_dir / "phot_df.parquet", index=False)
+    if not os.environ.get("ALCES_NO_PHOT"):          # distribution runs: head_df only (docs/nontransients.md)
+        phot_df.to_parquet(out_dir / "phot_df.parquet", index=False)
     print(f"[{time.time()-t_start:.1f}s] tablas persistidas: head_df.parquet "
           f"({len(head_df)} filas), phot_df.parquet ({len(phot_df)} filas)")
 
@@ -1015,6 +1710,8 @@ def main(class_key: str, ngentot_override: int | None = None, seed_index: int = 
         "detection_efficiency_pct": 100.0 * len(detected_snids) / ngentot,
         "snr_median": float(snr_sim.median()),
         "snr_p90": float(snr_sim.quantile(0.9)),
+        "window_mode": WINDOW_MODE, "lc_pre_days": LC_PRE_DAYS, "lc_post_days": LC_POST_DAYS,
+        "model_rest_span": list(model_span), "sim_rest_span": list(trest_range), "n_simwin_trunc": n_trunc,
     }, indent=2))
 
     sys.path.insert(0, str(REPO_ROOT))
