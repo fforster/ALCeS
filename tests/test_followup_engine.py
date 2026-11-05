@@ -70,14 +70,26 @@ def test_engine_matches_brute_force(tmp_path):
 
 
 def test_fold_years_preserves_rate(tmp_path):
-    """Folding: a 1-year window holds one copy of every simulated object, weighted by 1/(survey years)."""
-    d = _store(tmp_path)
+    """Folding: a 1-year window holds one copy of every simulated object of the years used, weighted by
+    1/(number of years used); the per-year breakdown reproduces the folded totals."""
+    d = _store(tmp_path)          # all first detections fall in survey year 0
     engine.catalog.cache_clear(); engine.load.cache_clear()
     q = engine.Query(classes=["X"], surveys=["WFD"], band="r", mag_lim=19.5, airmass_max=1.8, t_max=10.0,
-                     mjd_start=61500, mjd_end=61500 + 365.25 - 1e-6, step_min=30, fold_years=True)
-    c = engine.run(q, tmp_path)["classes"][0]
+                     mjd_start=61500, mjd_end=61500 + 365.25 - 1e-6, step_min=30, fold_years=True,
+                     fold_year_list=[0])
+    r = engine.run(q, tmp_path)
+    c = r["classes"][0]
     assert c["n_instances_detected"] == len(d["t_fd"])
-    assert np.isclose(c["N_detected"], d["weight"].sum() / 2.0)
+    assert np.isclose(c["N_detected"], d["weight"].sum())
+    assert np.isclose(r["by_year"]["detected"][0], c["N_detected"])
+    assert np.isclose(r["by_year"]["followable"][0], c["N_followable"])
+    # two years used, only year 0 populated: half the rate, and year 1 estimates zero
+    q.fold_year_list = [0, 1]
+    r = engine.run(q, tmp_path)
+    assert np.isclose(r["classes"][0]["N_detected"], d["weight"].sum() / 2)
+    assert r["by_year"]["detected"][1] == 0
+    q.fold_year_list = [1]
+    assert engine.run(q, tmp_path)["classes"][0]["N_detected"] == 0
     # literal dates outside the simulated span see nothing
     q.fold_years = False
     assert engine.run(q, tmp_path)["classes"][0]["N_detected"] == 0

@@ -113,8 +113,13 @@ details summary { cursor: pointer; color: var(--ink); font-weight: 600; }
       <label>Step (min)<input id="step" type="number" min="1" max="240" step="1" value="15"></label>
       <label>Sun below (°)<input id="sunalt" type="number" min="-30" max="0" step="1" value="-18"></label>
     </div>
-    <div class="checks" style="grid-template-columns:1fr"><label title="Each simulated object is also placed at its first-detection date shifted by whole years, so a window sees all 10 survey years (weights scaled to keep the rate). Off: only the objects Rubin detects on those exact simulated dates."><input type="checkbox" id="fold" checked>Typical year: fold all 10 survey years (≈10× statistics)</label></div>
     <p class="hint" id="span"></p>
+    <div class="checks" style="grid-template-columns:1fr;margin-top:6px"><label title="Off (default): only the events Rubin detects on these exact simulated dates. On: events first detected in the chosen survey years are shifted by whole years into the window (more statistics), which assumes those years are equivalent."><input type="checkbox" id="fold">Fold survey years into the window</label></div>
+    <div id="foldbox" hidden>
+      <p class="hint" style="margin:2px 0 4px">More statistics, but it assumes the chosen years are equivalent: the Rubin strategy changes between years (rolling stripes, survey phases). Choose years in the same phase, then check the per-year chart.</p>
+      <div class="checks" id="years" style="grid-template-columns:repeat(5,1fr)"></div>
+      <p class="links"><a id="yall">all</a><a id="ynone">none</a></p>
+    </div>
   </fieldset>
   <fieldset>
     <legend>Follow-up limits</legend>
@@ -163,6 +168,20 @@ const isoDate = m => fromMJD(m).toISOString().slice(0, 10);
 const $ = id => document.getElementById(id);
 const fmt = (x, d = 0) => x == null || !isFinite(x) ? "–" :
   (Math.abs(x) >= 100 ? Math.round(x).toLocaleString("en-US") : x.toLocaleString("en-US", {maximumFractionDigits: d, minimumFractionDigits: d}));
+function foldVerdict(chi2, dof) {
+  // chi^2 survival probability via Wilson-Hilferty normal approximation
+  const z = (Math.cbrt(chi2 / dof) - (1 - 2 / (9 * dof))) / Math.sqrt(2 / (9 * dof));
+  const p = 0.5 * erfc(z / Math.SQRT2);
+  return p < 0.01 ? `p ≈ ${p.toExponential(0)}: the years differ, folding is biased`
+       : p < 0.1 ? `p ≈ ${p.toFixed(2)}: marginal differences between years`
+       : `p ≈ ${p.toFixed(2)}: consistent within the statistical errors (differences may still hide in the noise)`;
+}
+function erfc(x) {  // Numerical Recipes erfc, |error| < 1.2e-7
+  const t = 1 / (1 + 0.5 * Math.abs(x));
+  const y = t * Math.exp(-x * x - 1.26551223 + t * (1.00002368 + t * (0.37409196 + t * (0.09678418 + t * (-0.18628806 +
+    t * (0.27886807 + t * (-1.13520398 + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))));
+  return x >= 0 ? y : 2 - y;
+}
 const relErr = (e, x) => x > 0 ? `${Math.round(100 * e / x)}%` : "–";
 const fmtN = x => x == null ? "–" : (x >= 100 ? fmt(x) : x >= 10 ? fmt(x, 1) : fmt(x, 2));
 let META = null, LAST = null, map = null, marker = null;
@@ -197,6 +216,11 @@ async function init() {
     $("surveys").insertAdjacentHTML("beforeend", `<label><input type="checkbox" value="${s}" ${s === "WFD" ? "checked" : ""}>${s}</label>`);
   const [lo, hi] = META.mjd_range;
   $("span").textContent = `Simulated first detections span ${isoDate(lo)} – ${isoDate(hi)} (MJD ${lo.toFixed(0)}–${hi.toFixed(0)}).`;
+  for (let y = 0; y < 10; y++)
+    $("years").insertAdjacentHTML("beforeend", `<label title="${isoDate(lo + 365.25 * y)} – ${isoDate(lo + 365.25 * (y + 1))}"><input type="checkbox" value="${y}" checked>Y${y + 1}</label>`);
+  $("fold").onchange = () => { $("foldbox").hidden = !$("fold").checked; };
+  $("yall").onclick = () => $("years").querySelectorAll("input").forEach(i => i.checked = true);
+  $("ynone").onclick = () => $("years").querySelectorAll("input").forEach(i => i.checked = false);
   const y0 = Math.ceil(lo + 365);
   $("d0").value = isoDate(y0); $("d1").value = isoDate(y0 + 365);
   map = L.map("map", {worldCopyJump: true}).setView([-30.24, -70.75], 1);
@@ -225,8 +249,10 @@ $("form").onsubmit = async ev => {
     t_min: +$("tmin").value, t_max: +$("tmax").value,
     mjd_start: toMJD($("d0").value), mjd_end: toMJD($("d1").value) + 1,
     step_min: +$("step").value, sun_alt: +$("sunalt").value, fold_years: $("fold").checked,
+    fold_year_list: [...$("years").querySelectorAll("input:checked")].map(i => +i.value),
   };
   if (!body.classes.length || !body.surveys.length) return status("Select at least one class and one survey.", true);
+  if (body.fold_years && !body.fold_year_list.length) return status("Select at least one survey year to fold.", true);
   $("go").disabled = true; status("Computing…");
   const t0 = performance.now();
   try {
@@ -285,6 +311,7 @@ function render(r) {
     <div class="tile"><div class="k">Fraction followable</div><div class="v">${dets > 0 ? (100 * fu / dets).toFixed(dets > 0 && fu / dets < 0.01 ? 2 : 1) + "%" : "–"}</div><div class="e">${q.band} ≤ ${q.mag_lim} · X ≤ ${q.airmass_max} · ${q.t_min}–${q.t_max} d</div></div>
     <div class="tile"><div class="k">Distinct followable objects per night</div><div class="v">${fmtN(r.per_night_mean)}</div><div class="e">mean over ${r.n_nights} nights</div></div>
   </div>
+  ${r.by_year ? `<div class="card"><h2>Folding check: the window estimated from each survey year alone</h2><p class="cap">Expected followable events in this window if every year were like survey year N (error bars ±1σ); the line is the folded result. ${r.by_year.chi2 != null ? `Scatter χ²/dof = <b>${r.by_year.chi2.toFixed(1)} / ${r.by_year.dof}</b> (${foldVerdict(r.by_year.chi2, r.by_year.dof)}).` : ""} Years that differ beyond their errors are not equivalent for these cuts: drop them or keep folding off.</p><div id="p_year" class="plot" style="height:240px"></div></div>` : ""}
   <div class="card"><h2>Followable objects per night</h2><p class="cap">Expected number of distinct objects that meet all limits at least once during each night, stacked by class.</p><div id="p_night" class="plot"></div></div>
   <div class="card"><h2>Objects followable at each moment</h2><p class="cap">Expected number meeting all limits at each dark time step (all selected classes).</p><div id="p_inst" class="plot" style="height:240px"></div></div>
   <div class="grid2">
@@ -301,10 +328,25 @@ function render(r) {
       <li>Events come from ALCeS <b>native-rate</b> sweeps (SNANA class rates, OpSim baseline v5.3.1, WFD ≥ 100 / DDF ≥ 1000 visits), never the flat-log z training sets. Each simulated object carries the number of real events it represents; sums of weights are expected counts.</li>
       <li>Only objects Rubin detects (first epoch with a detection flag) count. Their brightness is the <b>noiseless model</b> magnitude (MW + host extinction included), not the measured one.</li>
       <li>Night: Sun below the chosen altitude. Airmass: Pickering (2002). The Moon and weather are ignored. Target coordinates are J2000 (≤ 0.3° precession).</li>
-      <li><b>Typical year</b> (default): every simulated object is also used at its first-detection date shifted by whole years (365.25 d keeps its RA, light curve and the Sun–object geometry), with weights scaled so the rate is unchanged. This uses all 10 survey years for any window (≈10× statistics) but ignores year-to-year changes of the Rubin cadence (e.g. rolling). Untick it to use only the objects detected on those exact simulated dates. Errors count the copies of one simulated object as fully correlated.</li>
+      <li><b>Dates</b> (default): only events Rubin detects on the selected simulated dates, i.e. the strategy actually scheduled then (rolling stripes, survey phases). Honest but noisy at bright limits.</li>
+      <li><b>Fold survey years</b> (optional): events first detected in the chosen survey years are also shifted by whole years into the window (365.25 d keeps the RA, light curve and Sun–object geometry; weights divided by the number of years). This is <b>not</b> neutral: the Rubin strategy changes between years, so the detected rate differs by up to ~2× between years for some classes. The per-year chart and its χ² show whether the chosen years agree for the current cuts. Errors count the copies of one simulated object as fully correlated.</li>
+      <li>Templates: the simulations detect transients by signal-to-noise from the first night; the lack of difference-imaging templates early in the survey is not modelled (in either mode).</li>
       <li>SNII: all normal SNe II, 4 × the SNII-NMF rate (z ≤ 0.3 from the low-z sweep, z &gt; 0.3 from the full sweep). Errors grow when few simulated objects pass the cuts (see “sim” column).</li>
     </ul>
   </details>`;
+
+  if (r.by_year) {
+    const by = r.by_year, yl = by.years.map(y => `Y${y + 1}`);
+    Plotly.newPlot("p_year", [
+      {x: yl, y: by.followable, type: "scatter", mode: "markers", name: "single year",
+       marker: {size: 9, color: css("--accent")}, customdata: by.n_sim_followable,
+       error_y: {type: "data", array: by.followable_err, color: css("--accent"), thickness: 1.5, width: 4},
+       hovertemplate: "%{x}: %{y:,.0f} ± %{error_y.array:,.0f} (%{customdata} sim.)<extra></extra>"},
+      {x: yl, y: yl.map(() => fu), type: "scatter", mode: "lines", name: "folded",
+       line: {color: css("--ink2"), width: 1.5, dash: "dash"}, hovertemplate: "folded: %{y:,.0f}<extra></extra>"}],
+      layout({hovermode: "closest", xaxis: {type: "category", title: {text: "survey year used"}},
+              yaxis: {title: {text: "followable in window"}}}), CFG);
+  }
 
   // nightly stacked area
   const nx = r.nightly.night_mjd.map(m => fromMJD(m));

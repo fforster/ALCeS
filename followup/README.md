@@ -46,13 +46,19 @@ mjd_start, mjd_end, step_min, sun_alt, fold_years`). Python: `followup.engine.ru
    - Expected numbers detected in [T0, T1] and followable, with errors √Σw².
    - Distinct followable objects per night, and the instantaneous number.
    - Per object: followable hours, number of nights, and the delay from first detection to the first opportunity.
-4. **Typical year** (`fold_years`, default on). Each simulated object is also placed at t_fd + m × 365.25 d.
-   - A whole-year shift keeps the RA, the light curve and the Sun–object geometry, and the weights are scaled by
-     365.25 d / survey span.
-   - Any window then uses all 10 survey years: about 10× the statistics, at the cost of ignoring year-to-year
-     cadence changes (rolling).
-   - Errors treat the copies of one simulated object as fully correlated. With it off, only the simulated dates are
-     used.
+4. **Dates vs folding.** By default only the events detected on the selected simulated dates are used. This
+   follows the strategy actually scheduled then (rolling stripes, survey phases).
+   - Optional `fold_years`: events first detected in the survey years `fold_year_list` (0-based; default all) are
+     also placed at t_fd + m × 365.25 d, with weights divided by the number of years used.
+   - A whole-year shift keeps the RA, the light curve and the Sun–object geometry, **but not the Rubin strategy**.
+     For one example window (WFD, Pachón), the detected rate differs between years by χ²/dof = 45–131 / 9 per
+     class, and the weakest year has 0.52–0.86× the strongest. Followable counts at r ≤ 22 differ by ~±20%
+     (χ² 21/9).
+   - The result therefore includes `by_year`: the window estimated from each year alone, plus a χ² of their
+     scatter, so you can see whether the chosen years are equivalent for the given cuts.
+   - Errors treat the copies of one simulated object as fully correlated.
+   - Neither mode models missing difference-imaging templates early in the survey: the simulations detect by S/N
+     from the first night.
 
 Astronomy uses fast analytic forms:
 - Sun: Astronomical Almanac, to ~0.01°.
@@ -78,9 +84,10 @@ Non-transients are not included: the native LCLIB runs have no light curves.
 ## Caveats
 
 - **Bright-end statistics.** Native sweeps sample the whole volume, so few simulated objects are bright. For
-  example, about 70 simulated SNe Ia carry the r ≤ 20 estimate for one year from Pachón, even with folding. The GUI
-  flags classes with fewer than 20 simulated followable objects. Dedicated low-z native sweeps (as was done for
-  SNII) would tighten bright limits.
+  example, only ~8 simulated SNe Ia carry the r ≤ 20 estimate for one year from Pachón (±35%). The GUI shows the
+  number of simulated objects behind every result and flags classes with fewer than 20. Folding helps but biases
+  (see above). The clean fix is dedicated low-z native sweeps for the bright end, as was done for SNII
+  (SNIINMFTAILLOWZ): same rates, z range cut, many more nearby events.
 - Moon, weather, telescope slews and the time a site needs to react are ignored.
 - WFD and DDF are separate simulations: selecting both double-counts the DDF fields (≈0.3% of the WFD area).
 - Only Rubin detection is modelled: an object enters at its first Rubin detection, not at its explosion.

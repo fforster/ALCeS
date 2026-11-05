@@ -54,7 +54,8 @@ class RunRequest(BaseModel):
     mjd_end: float = 61765.0
     step_min: float = Field(15.0, ge=1, le=240)
     sun_alt: float = Field(-18.0, ge=-30, le=0)
-    fold_years: bool = True
+    fold_years: bool = False
+    fold_year_list: list[int] | None = None
 
 
 @app.get("/api/meta")

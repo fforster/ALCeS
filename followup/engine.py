@@ -45,7 +45,12 @@ class Query:
     mjd_end: float = 61765.0
     step_min: float = 15.0
     sun_alt: float = -18.0
-    fold_years: bool = True          # use all survey years, shifted by whole years into the window (10x statistics)
+    # False: the simulated objects at their simulated dates (default). True: also use the objects first detected in
+    # the survey years `fold_year_list` (0 = first year; None = all), shifted by whole years into the window. This
+    # assumes those years are equivalent (rolling stripes and other strategy changes make them differ): check with
+    # the per-year breakdown returned in "by_year".
+    fold_years: bool = False
+    fold_year_list: list | None = None
 
 
 @lru_cache(maxsize=None)
@@ -60,28 +65,36 @@ def load(name: str, survey: str, store: str = str(STORE)):
 
 
 YEAR = 365.25
+N_SURVEY_YEARS = 10
 
 
-def _instances(d, q, entry):
-    """(source index, first-detection MJD, weight) of the objects used for this query.
+def survey_year(t_fd, t_survey0):
+    """0-based survey year of a first detection (year 0 starts at the first simulated detection)."""
+    return np.clip(np.floor((np.asarray(t_fd) - t_survey0) / YEAR).astype(int), 0, N_SURVEY_YEARS - 1)
+
+
+def _instances(d, q, years_used, t_survey0):
+    """(source index, first-detection MJD, weight, source survey year) of the objects used for this query.
 
     fold_years=False: the simulated objects at their simulated dates.
-    fold_years=True : every simulated object is also placed at t_fd + m * 365.25 d for every integer m that lands in
-    [T0 - t_max, T1]; RA/Dec, light curve and the Sun-object geometry are unchanged by a whole-year shift, so the
-    window sees a "typical survey year" built from all the survey years, with each copy weighted by
-    365.25 / (survey span) so that the expected rate is preserved (sum of weights per year = N_10yr / span_years)."""
+    fold_years=True : every simulated object first detected in one of `years_used` is also placed at
+    t_fd + m * 365.25 d for every integer m that lands in [T0 - t_max, T1]. RA/Dec, light curve and the Sun-object
+    geometry are unchanged by a whole-year shift; the Rubin strategy is NOT (rolling stripes, survey changes), so the
+    result is the window as it would be if every year were like the average of `years_used`. Each copy is weighted by
+    1 / len(years_used), which preserves the expected rate of those years."""
     t_fd, w = d["t_fd"], d["weight"]
     n = len(t_fd)
+    yr = survey_year(t_fd, t_survey0)
     if not q.fold_years:
-        return np.arange(n), t_fd, w
-    span = entry["survey_years"] * YEAR
+        return np.arange(n), t_fd, w, yr
+    keep = np.isin(yr, years_used)
     lo, hi = q.mjd_start - q.t_max, q.mjd_end
     m0 = np.ceil((lo - t_fd) / YEAR).astype(int)
     m1 = np.floor((hi - t_fd) / YEAR).astype(int)
-    cnt = np.maximum(m1 - m0 + 1, 0)
+    cnt = np.where(keep, np.maximum(m1 - m0 + 1, 0), 0)
     src = np.repeat(np.arange(n), cnt)
     m = np.repeat(m0, cnt) + (np.arange(cnt.sum()) - np.repeat(np.cumsum(cnt) - cnt, cnt))
-    return src, t_fd[src] + m * YEAR, w[src] * (YEAR / span)
+    return src, t_fd[src] + m * YEAR, w[src] / len(years_used), yr[src]
 
 
 def _hist(x, w, bins):
@@ -105,6 +118,11 @@ def run(q: Query, store: Path = STORE):
     # keep the grid manageable for long windows
     step = max(step, (span + q.t_max) * 1440.0 / 400_000)
     b = bands.index(q.band)
+    t_survey0 = min(e["t_fd_range"][0] for e in cat["entries"].values())
+    years_used = sorted({int(y) for y in (q.fold_year_list if q.fold_year_list is not None
+                                           else range(N_SURVEY_YEARS))})
+    if q.fold_years and (not years_used or not all(0 <= y < N_SURVEY_YEARS for y in years_used)):
+        raise ValueError(f"fold_year_list must hold survey years 0..{N_SURVEY_YEARS - 1}")
 
     grid = astro.time_grid(q.mjd_start, q.mjd_end + q.t_max, step)
     night = astro.night_mask(grid, q.lat, q.lon, q.height, q.sun_alt)
@@ -137,7 +155,7 @@ def run(q: Query, store: Path = STORE):
                 continue
             d = load(name, survey, str(store))
             # instances: the simulated objects themselves, or (fold_years) copies shifted by whole years
-            src, t_fd, w = _instances(d, q, cat["entries"][key])
+            src, t_fd, w, yr = _instances(d, q, years_used, t_survey0)
             ra, dec = d["ra"][src], d["dec"][src]
             in_range = (t_fd >= q.mjd_start) & (t_fd <= q.mjd_end)
             n_sim_det += int(len(np.unique(src[in_range])))
@@ -206,7 +224,7 @@ def run(q: Query, store: Path = STORE):
             r = in_range
             # source id unique across surveys (copies of one simulated object are fully correlated)
             objs.append(dict(w=w[r], hours=hours[r], first=first[r], nights=nnights[r],
-                             src=src[r] + (len(objs) << 32)))
+                             src=src[r] + (len(objs) << 32), yr=yr[r]))
         if not objs:
             continue
         o = {k: np.concatenate([x[k] for x in objs]) for k in objs[0]}
@@ -251,6 +269,19 @@ def run(q: Query, store: Path = STORE):
             "hist_delay_nsim": nsim_hist(o["first"][fu], delay_bins),
             "hist_nights_nsim": nsim_hist(o["nights"][fu], nights_bins),
         })
+        if q.fold_years:
+            # the window's numbers as estimated from each survey year alone (copy weights x number of years used):
+            # years that disagree beyond their errors are not equivalent for these cuts
+            k = len(years_used)
+            by = {"detected": [], "detected_err": [], "followable": [], "followable_err": [], "n_sim_followable": []}
+            for y in years_used:
+                sy = o["yr"] == y
+                by["detected"].append(k * float(o["w"][sy].sum()))
+                by["detected_err"].append(k * src_err(sy))
+                by["followable"].append(k * float(o["w"][sy & fu].sum()))
+                by["followable_err"].append(k * src_err(sy & fu))
+                by["n_sim_followable"].append(int(len(np.unique(o["src"][sy & fu]))))
+            per_class[-1]["by_year"] = by
         ts_class[name] = ts
         night_class[name] = night_w
         ts_total += ts
@@ -264,8 +295,22 @@ def run(q: Query, store: Path = STORE):
     totals.update({k: int(sum(pc[k] for pc in per_class)) for k in ("n_sim_detected", "n_sim_followable")})
     n_nights = len(nights)
     dark_hours = float(in_win.sum() * step / 60.0)
+    by_year = None
+    if q.fold_years and per_class:
+        by_year = {"years": years_used, "survey_start_mjd": t_survey0}
+        for key in ("detected", "followable", "n_sim_followable"):
+            by_year[key] = np.sum([pc["by_year"][key] for pc in per_class], axis=0).tolist()
+        for key in ("detected_err", "followable_err"):
+            by_year[key] = np.sqrt(np.sum([np.square(pc["by_year"][key]) for pc in per_class], axis=0)).tolist()
+        f, e = np.array(by_year["followable"]), np.array(by_year["followable_err"])
+        # chi^2 of the per-year estimates around their weighted mean: >> dof means the years differ
+        ok = e > 0
+        if ok.sum() >= 2:
+            mean = np.sum(f[ok] / e[ok] ** 2) / np.sum(1 / e[ok] ** 2)
+            by_year["chi2"] = float(np.sum(((f[ok] - mean) / e[ok]) ** 2))
+            by_year["dof"] = int(ok.sum() - 1)
     return {
-        "query": q.__dict__, "step_min_used": step,
+        "query": q.__dict__, "step_min_used": step, "by_year": by_year,
         "n_nights": n_nights, "dark_hours": dark_hours, "window_days": span,
         "totals": totals,
         "per_night_mean": (sum(sum(v) for v in night_series.values()) / n_nights) if n_nights else 0.0,
