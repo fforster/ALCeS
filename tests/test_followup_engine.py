@@ -84,6 +84,21 @@ def test_sky_points_and_object_detail_agree(tmp_path):
         assert all(q.t_min - 1e-9 <= a and b <= q.t_max + q.step_min / 1440 + 1e-9 for a, b in o["followable"])
 
 
+def test_shared_draws_are_correlated(tmp_path):
+    """Two classes with the same (RA, Dec, t0) draws: the combined error adds their weights per draw first."""
+    d = _store(tmp_path)
+    np.savez(tmp_path / "Y_WFD.npz", **{**d, "weight": 3 * d["weight"]})
+    cat = json.loads((tmp_path / "catalog.json").read_text())
+    cat["entries"]["Y_WFD"] = {**cat["entries"]["X_WFD"], "class": "Y"}
+    (tmp_path / "catalog.json").write_text(json.dumps(cat))
+    engine.catalog.cache_clear(); engine.load.cache_clear()
+    q = engine.Query(classes=["X", "Y"], surveys=["WFD"], band="r", mag_lim=19.5, airmass_max=1.8, t_max=25.0,
+                     mjd_start=61000, mjd_end=61060, step_min=10)
+    t = engine.run(q, tmp_path)["totals"]
+    assert np.isclose(t["N_detected_err"], np.sqrt(((d["weight"] + 3 * d["weight"]) ** 2).sum()))
+    assert t["N_detected_err"] > np.sqrt((d["weight"] ** 2).sum() + ((3 * d["weight"]) ** 2).sum())
+
+
 def test_fold_years_preserves_rate(tmp_path):
     """Folding: a 1-year window holds one copy of every simulated object of the years used, weighted by
     1/(number of years used); the per-year breakdown reproduces the folded totals."""

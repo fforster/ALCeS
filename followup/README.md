@@ -106,6 +106,14 @@ Non-transients are not included: the native LCLIB runs have no light curves.
   number of simulated objects behind every result and flags classes with fewer than 20. Folding helps but biases
   (see above). The clean fix is dedicated low-z native sweeps for the bright end, as was done for SNII
   (SNIINMFTAILLOWZ): same rates, z range cut, many more nearby events.
+- **Shared draws across classes.** The ALCeS sweeps reuse their random seeds for every class: object k of a run has
+  the same RA, Dec and peak time (t0) in all classes. For example, ~5,200 of 5,937 detected SNIa WFD positions
+  coincide exactly with SLSN-I ones, with identical peak times. Each class is still a valid sample on its own, but
+  the classes' sampling fluctuations are correlated.
+  - Totals over classes therefore group events by draw (survey, RA, Dec) before squaring the weights. For example,
+    detected ± 34k instead of ± 29k when treated as independent.
+  - On the sky map, symbols of different classes often coincide, so each class has its own open symbol and the
+    marker size grows with the real events a simulated object stands for.
 - Moon, weather, telescope slews and the time a site needs to react are ignored.
 - WFD and DDF are separate simulations: selecting both double-counts the DDF fields (≈0.3% of the WFD area).
 - Only Rubin detection is modelled: an object enters at its first Rubin detection, not at its explosion.

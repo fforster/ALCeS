@@ -382,6 +382,11 @@ function binLabels(edges, unit, d = 1) {
 }
 
 // ---------- sky map ----------
+const SYMBOL = {"SNIa": "circle-open", "SNII": "square-open", "SLSN-I": "diamond-open", "TDE": "triangle-up-open",
+                "SNIIn": "triangle-down-open", "SNIax": "pentagon-open", "SNIa-91bg": "hexagon-open", "KN-Bulla19": "star-open",
+                "Other": "x-thin-open"};
+const markerSize = w => Math.min(18, 7 + 2.5 * Math.log10(1 + w));
+const maxW = (f, g) => f.w.reduce((m, w, i) => group(f.cls[i]) === g ? Math.max(m, w) : m, 0);
 const skyLon = ra => -(((ra + 180) % 360 + 360) % 360 - 180);      // RA increasing to the left, 0h at the centre
 function skyNote(r) {
   const s = r.sky.followable.sampled || {};
@@ -403,11 +408,17 @@ function renderSky(r, G) {
     traces.push({type: "scattergeo", mode: "lines", name: `airmass ≤ ${r.query.airmass_max} limit`, lon, lat: lon.map(() => d),
       line: {color: css("--ink2"), width: 1.2, dash: "dash"}, hoverinfo: "skip", showlegend: d === r.airmass_dec_band.find(v => v > -89.5 && v < 89.5)});
   }
-  for (const g of G) {
+  // open symbols, one per class: ALCeS reuses (RA, Dec, t0) draws across classes, so events of different classes
+  // often sit at exactly the same position; size grows with the real events each simulated object stands for.
+  // Classes with the largest markers are drawn first so smaller ones stay visible on top.
+  const groupsBySize = [...G].sort((a, b) => maxW(f, b) - maxW(f, a));
+  for (const g of groupsBySize) {
     const ii = [...Array(f.n).keys()].filter(i => group(f.cls[i]) === g);
     if (!ii.length) continue;
     traces.push({type: "scattergeo", mode: "markers", name: g, lon: ii.map(i => skyLon(f.ra[i])), lat: ii.map(i => f.dec[i]),
-      marker: {size: 6, color: colorOf(g), line: {color: css("--surface"), width: 0.5}},
+      legendrank: G.indexOf(g) + 10,
+      marker: {size: ii.map(i => markerSize(f.w[i])), symbol: SYMBOL[g] || "x-thin-open", color: colorOf(g),
+               line: {color: colorOf(g), width: 2}},
       customdata: ii.map(i => [f.cls[i], f.survey[i], f.idx[i], f.shift[i], f.hours[i], f.w[i], f.ra[i], f.first[i]]),
       hovertemplate: "<b>%{customdata[0]}</b> (%{customdata[1]})<br>RA %{customdata[6]:.2f}°, Dec %{lat:.2f}°<br>followable %{customdata[4]:.1f} h, first chance %{customdata[7]:.1f} d after detection<br>stands for %{customdata[5]:.2f} real events<br><i>click for details</i><extra></extra>"});
   }
@@ -499,7 +510,8 @@ function renderObject(o) {
 function render(r) {
   const q = r.query, G = groupsOf(r);
   const dets = r.totals.N_detected, fu = r.totals.N_followable;
-  const err = k => Math.sqrt(r.classes.reduce((a, c) => a + c[k] ** 2, 0));
+  // combined errors from the engine: events of different classes that share a simulated draw are correlated
+  const err = k => r.totals[k];
   const medH = r.classes.length === 1 ? r.classes[0].median_hours : null;
   const days = r.window_days;
   $("results").innerHTML = `
@@ -509,7 +521,7 @@ function render(r) {
     <div class="tile"><div class="k">Fraction followable</div><div class="v">${dets > 0 ? (100 * fu / dets).toFixed(dets > 0 && fu / dets < 0.01 ? 2 : 1) + "%" : "–"}</div><div class="e">${q.band} ≤ ${q.mag_lim} · X ≤ ${q.airmass_max} · ${q.t_min}–${q.t_max} d</div></div>
     <div class="tile"><div class="k">Distinct followable objects per night</div><div class="v">${fmtN(r.per_night_mean)}</div><div class="e">mean over ${r.n_nights} nights</div></div>
   </div>
-  <div class="card"><h2>Sky distribution</h2><p class="cap">Mollweide projection in equatorial coordinates (RA increases to the left, 0h at the centre). Coloured: followable events first detected in the window; grey: a sample of detected events that are never followable. Dashed: declination limits reachable within the airmass limit from the site; dotted: Galactic plane. <b>Click an event</b> to see its light curve, Rubin photometry and visibility windows.${skyNote(r)}</p><div id="p_sky" class="plot" style="height:430px"></div></div>
+  <div class="card"><h2>Sky distribution</h2><p class="cap">Mollweide projection in equatorial coordinates (RA increases to the left, 0h at the centre). Coloured: followable events first detected in the window; grey: a sample of detected events that are never followable. One open symbol per class; <b>symbol size grows with the number of real events a simulated object stands for</b> (e.g. each simulated SN Ia stands for hundreds). ALCeS reuses the same random positions and explosion times for every class, so symbols of different classes often coincide. Dashed: declination limits reachable within the airmass limit from the site; dotted: Galactic plane. <b>Click an event</b> to see its light curve, Rubin photometry and visibility windows.${skyNote(r)}</p><div id="p_sky" class="plot" style="height:430px"></div></div>
   <div class="card" id="objcard" hidden></div>
   ${r.by_year ? `<div class="card"><h2>Folding check: the window estimated from each survey year alone</h2><p class="cap">Expected followable events in this window if every year were like survey year N (error bars ±1σ); the line is the folded result. ${r.by_year.chi2 != null ? `Scatter χ²/dof = <b>${r.by_year.chi2.toFixed(1)} / ${r.by_year.dof}</b> (${foldVerdict(r.by_year.chi2, r.by_year.dof)}).` : ""} Years that differ beyond their errors are not equivalent for these cuts: drop them or keep folding off.</p><div id="p_year" class="plot" style="height:240px"></div></div>` : ""}
   <div class="card"><h2>Followable objects per night</h2><p class="cap">Expected number of distinct objects that meet all limits at least once during each night, stacked by class.</p><div id="p_night" class="plot"></div></div>

@@ -264,6 +264,7 @@ def run(q: Query, store: Path = STORE):
     ts_total = np.zeros(len(tn))
     per_class, ts_class, night_class = [], {}, {}
     sky = {"followable": [], "detected": []}
+    draws = []
     rng = np.random.default_rng(12345)
     u_nights = np.unique(night_id[in_win]) if len(tn) else np.zeros(0, int)
 
@@ -359,6 +360,13 @@ def run(q: Query, store: Path = STORE):
             # source id unique across surveys (copies of one simulated object are fully correlated)
             objs.append(dict(w=w[r], hours=hours[r], first=first[r], nights=nnights[r],
                              src=src[r] + (len(objs) << 32), yr=yr[r]))
+            # ALCeS reuses its random seeds across classes: object k of a run has the same (RA, Dec, t0) in every
+            # class. Events sharing a draw (and the year-shifted copies of one object) fluctuate together, so
+            # errors of sums over classes group them by (survey, RA, Dec) before squaring.
+            draws.append(dict(key=np.stack([np.full(int(r.sum()), q.surveys.index(survey)),
+                                            np.round(ra[r] * 1e6).astype(np.int64),
+                                            np.round(dec[r] * 1e6).astype(np.int64)], axis=1),
+                              w=w[r], fu=hours[r] > 0, yr=yr[r]))
         if not objs:
             continue
         o = {k: np.concatenate([x[k] for x in objs]) for k in objs[0]}
@@ -427,6 +435,23 @@ def run(q: Query, store: Path = STORE):
     night_series = {c: [night_class[c].get(n, 0.0) for n in nights] for c in night_class}
     totals = {k: float(sum(pc[k] for pc in per_class)) for k in ("N_detected", "N_followable")}
     totals.update({k: int(sum(pc[k] for pc in per_class)) for k in ("n_sim_detected", "n_sim_followable")})
+    if draws:
+        dk = np.concatenate([x["key"] for x in draws])
+        dw = np.concatenate([x["w"] for x in draws])
+        dfu = np.concatenate([x["fu"] for x in draws])
+        dyr = np.concatenate([x["yr"] for x in draws])
+    else:
+        dk, dw, dfu, dyr = np.zeros((0, 3), np.int64), np.zeros(0), np.zeros(0, bool), np.zeros(0, int)
+
+    def draw_err(sel, scale=1.0):
+        """error of a sum over classes: weights of events sharing a simulated draw are added before squaring."""
+        if not sel.any():
+            return 0.0
+        _, inv = np.unique(dk[sel], axis=0, return_inverse=True)
+        return float(scale * np.sqrt((np.bincount(inv.ravel(), weights=dw[sel]) ** 2).sum()))
+    totals["N_detected_err"] = draw_err(np.ones(len(dw), bool))
+    totals["N_followable_err"] = draw_err(dfu)
+    totals["n_shared_draws_followable"] = int(len(np.unique(dk[dfu], axis=0))) if dfu.any() else 0
     n_nights = len(nights)
     dark_hours = float(in_win.sum() * step / 60.0)
     by_year = None
@@ -434,8 +459,9 @@ def run(q: Query, store: Path = STORE):
         by_year = {"years": years_used, "survey_start_mjd": t_survey0}
         for key in ("detected", "followable", "n_sim_followable"):
             by_year[key] = np.sum([pc["by_year"][key] for pc in per_class], axis=0).tolist()
-        for key in ("detected_err", "followable_err"):
-            by_year[key] = np.sqrt(np.sum([np.square(pc["by_year"][key]) for pc in per_class], axis=0)).tolist()
+        k_years = len(years_used)
+        by_year["detected_err"] = [draw_err(dyr == y, k_years) for y in years_used]
+        by_year["followable_err"] = [draw_err((dyr == y) & dfu, k_years) for y in years_used]
         f, e = np.array(by_year["followable"]), np.array(by_year["followable_err"])
         # chi^2 of the per-year estimates around their weighted mean: >> dof means the years differ
         ok = e > 0
