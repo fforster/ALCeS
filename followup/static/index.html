@@ -188,7 +188,7 @@ function erfc(x) {  // Numerical Recipes erfc, |error| < 1.2e-7
 }
 const relErr = (e, x) => x > 0 ? `${Math.round(100 * e / x)}%` : "–";
 const fmtN = x => x == null ? "–" : (x >= 100 ? fmt(x) : x >= 10 ? fmt(x, 1) : fmt(x, 2));
-let META = null, LAST = null, map = null, marker = null;
+let META = null, LAST = null, LASTBODY = null, map = null, marker = null;
 
 // ---------- theme ----------
 $("theme").onclick = () => {
@@ -196,7 +196,7 @@ $("theme").onclick = () => {
     : matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.dataset.theme = dark ? "light" : "dark";
   try { localStorage.setItem("fu-theme", document.documentElement.dataset.theme); } catch (e) {}
-  if (LAST) render(LAST);
+  if (LAST) { render(LAST); if (LASTOBJ) { $("objcard").hidden = false; renderObject(LASTOBJ); } }
 };
 try { const t = localStorage.getItem("fu-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
 
@@ -342,7 +342,7 @@ $("form").onsubmit = async ev => {
     const r = await fetch("api/run", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
     const j = await r.json();
     if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail));
-    LAST = j; render(j);
+    LAST = j; LASTBODY = body; LASTOBJ = null; render(j);
     status(`Done in ${((performance.now() - t0) / 1000).toFixed(1)} s · ${j.n_nights} nights · ${fmt(j.dark_hours)} h with Sun < ${body.sun_alt}° · grid step ${j.step_min_used.toFixed(1)} min`);
   } catch (e) { status("Error: " + e.message, true); }
   finally { $("go").disabled = false; }
@@ -381,6 +381,121 @@ function binLabels(edges, unit, d = 1) {
   return edges.slice(0, -1).map((a, i) => `${fmt(a, a < 10 ? d : 0)}–${fmt(edges[i + 1], edges[i + 1] < 10 ? d : 0)} ${unit}`);
 }
 
+// ---------- sky map ----------
+const skyLon = ra => -(((ra + 180) % 360 + 360) % 360 - 180);      // RA increasing to the left, 0h at the centre
+function skyNote(r) {
+  const s = r.sky.followable.sampled || {};
+  const capped = Object.entries(s).filter(([, f]) => f < 1).map(([k, f]) => `${k} (${Math.round(100 * f)}%)`);
+  return capped.length ? ` Shown as a random sample: ${capped.join(", ")}.` : "";
+}
+function renderSky(r, G) {
+  const f = r.sky.followable, bg = r.sky.detected, axis = css("--axis"), grid = css("--grid"), muted = css("--muted");
+  const traces = [];
+  if (bg.n) traces.push({type: "scattergeo", mode: "markers", name: "detected, not followable", lon: bg.ra.map(skyLon), lat: bg.dec,
+    marker: {size: 3, color: muted, opacity: 0.45}, hoverinfo: "skip"});
+  const gp = META.galactic_plane, gl = gp.ra.map(skyLon);
+  // break the Galactic-plane line where it wraps around the map edge
+  const gx = [], gy = [];
+  gl.forEach((x, i) => { if (i && Math.abs(x - gl[i - 1]) > 180) { gx.push(null); gy.push(null); } gx.push(x); gy.push(gp.dec[i]); });
+  traces.push({type: "scattergeo", mode: "lines", name: "Galactic plane", lon: gx, lat: gy, line: {color: muted, width: 1.5, dash: "dot"}, hoverinfo: "skip"});
+  for (const d of r.airmass_dec_band) if (d > -89.5 && d < 89.5) {
+    const lon = Array.from({length: 73}, (_, i) => -180 + 5 * i);
+    traces.push({type: "scattergeo", mode: "lines", name: `airmass ≤ ${r.query.airmass_max} limit`, lon, lat: lon.map(() => d),
+      line: {color: css("--ink2"), width: 1.2, dash: "dash"}, hoverinfo: "skip", showlegend: d === r.airmass_dec_band.find(v => v > -89.5 && v < 89.5)});
+  }
+  for (const g of G) {
+    const ii = [...Array(f.n).keys()].filter(i => group(f.cls[i]) === g);
+    if (!ii.length) continue;
+    traces.push({type: "scattergeo", mode: "markers", name: g, lon: ii.map(i => skyLon(f.ra[i])), lat: ii.map(i => f.dec[i]),
+      marker: {size: 6, color: colorOf(g), line: {color: css("--surface"), width: 0.5}},
+      customdata: ii.map(i => [f.cls[i], f.survey[i], f.idx[i], f.shift[i], f.hours[i], f.w[i], f.ra[i], f.first[i]]),
+      hovertemplate: "<b>%{customdata[0]}</b> (%{customdata[1]})<br>RA %{customdata[6]:.2f}°, Dec %{lat:.2f}°<br>followable %{customdata[4]:.1f} h, first chance %{customdata[7]:.1f} d after detection<br>stands for %{customdata[5]:.2f} real events<br><i>click for details</i><extra></extra>"});
+  }
+  const labels = [0, 3, 6, 9, 15, 18, 21].map(h => ({h, lon: skyLon(15 * h)}));
+  traces.push({type: "scattergeo", mode: "text", lon: labels.map(l => l.lon), lat: labels.map(() => 0), text: labels.map(l => `${l.h}h`),
+    textfont: {color: muted, size: 11}, hoverinfo: "skip", showlegend: false});
+  const lay = layout({hovermode: "closest", margin: {l: 4, r: 4, t: 4, b: 4},
+    geo: {projection: {type: "mollweide"}, showland: false, showcoastlines: false, showcountries: false, showocean: false,
+          showframe: true, framecolor: axis, bgcolor: "rgba(0,0,0,0)",
+          lataxis: {showgrid: true, gridcolor: grid, dtick: 30}, lonaxis: {showgrid: true, gridcolor: grid, dtick: 45}}});
+  Plotly.newPlot("p_sky", traces, lay, CFG);
+  $("p_sky").on("plotly_click", ev => {
+    const p = ev.points.find(pt => pt.customdata);
+    if (p) loadObject(p.customdata);
+  });
+}
+
+// ---------- one event: light curve, Rubin photometry, visibility ----------
+const BAND_COLOR = {u: "--s7", g: "--s3", r: "--s8", i: "--s2", z: "--s5", Y: "--s4"};
+let LASTOBJ = null;
+async function loadObject(cd) {
+  const [cls, survey, idx, shift] = cd;
+  const card = $("objcard");
+  card.hidden = false;
+  card.innerHTML = `<h2>${cls}</h2><p class="cap">Loading light curve…</p>`;
+  card.scrollIntoView({behavior: "smooth", block: "nearest"});
+  try {
+    const r = await fetch("api/object", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({...LASTBODY, cls, survey, idx, shift})});
+    const j = await r.json();
+    if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail));
+    LASTOBJ = j; renderObject(j);
+  } catch (e) { card.innerHTML = `<h2>${cls}</h2><p class="cap" style="color:var(--critical)">Could not load: ${e.message}</p>`; }
+}
+function renderObject(o) {
+  const q = o.query, card = $("objcard");
+  const yrs = Math.round(o.shift_days / 365.25);
+  const prov = o.run ? `${o.sweep} · run ${o.run} · SNID ${o.snid}` : "store only (rebuild for Rubin photometry)";
+  card.innerHTML = `<h2><span class="sw" style="background:${colorOf(group(o.cls))}"></span>${o.cls} <span style="font-weight:400;color:var(--ink2)">· ${o.survey} · z = ${o.z.toFixed(3)}</span></h2>
+    <p class="cap">RA ${o.ra.toFixed(3)}°, Dec ${o.dec.toFixed(3)}° · first Rubin detection ${fromMJD(o.t_fd).toISOString().slice(0, 16).replace("T", " ")} UTC · model peak ${(o.t_peak - o.t_fd >= 0 ? "+" : "") + (o.t_peak - o.t_fd).toFixed(1)} d ·
+    <b>${o.followable_hours.toFixed(1)} h followable</b> (${q.band} ≤ ${q.mag_lim}, X ≤ ${q.airmass_max}, ${q.t_min}–${q.t_max} d) ·
+    stands for ${o.weight_10yr.toPrecision(3)} real events in 10 yr${yrs ? ` · <b>shifted ${yrs > 0 ? "+" : ""}${yrs} yr</b> from its simulated date (folding; the Rubin points show the cadence of the simulated year)` : ""}<br>
+    <span style="color:var(--muted)">${prov}</span>
+    <a style="float:right;color:var(--accent);cursor:pointer" id="objclose" title="Close this panel">close</a></p>
+    <p class="cap">Lines: noiseless model per band (thick: the follow-up band). Points: Rubin detections with 1σ errors (click a band in the legend to toggle its curve and points; non-detections are off by default). Vertical lines: first detection (solid) and the min–max days window (dashed); horizontal dashed: the magnitude limit. Background: <b>grey</b> = observable from the site (night and airmass ≤ ${q.airmass_max}); <b>blue</b> = followable (all limits met).</p>
+    <div id="p_lc" class="plot" style="height:400px"></div>`;
+  $("objclose").onclick = () => { card.hidden = true; LASTOBJ = null; };
+  const traces = [];
+  const allm = [];
+  let nondetShown = false;
+  for (const b of o.bands) {
+    const c = css(BAND_COLOR[b] || "--other");
+    const m = o.model[b];
+    if (m && m.t.length) {
+      traces.push({x: m.t, y: m.mag, type: "scatter", mode: "lines", name: b, legendgroup: b,
+        line: {color: c, width: b === q.band ? 2.5 : 1.5}, hovertemplate: `${b} model: %{y:.2f} mag at %{x:.1f} d<extra></extra>`});
+      allm.push(...m.mag.filter((v, i) => m.t[i] >= -30 && m.t[i] <= q.t_max + 30));
+    }
+    const p = o.phot[b];
+    if (p) {
+      const di = p.t.map((_, i) => i).filter(i => p.det[i] && p.mag[i] != null);
+      if (di.length) traces.push({x: di.map(i => p.t[i]), y: di.map(i => p.mag[i]), type: "scatter", mode: "markers",
+        name: `${b} Rubin det.`, legendgroup: b, showlegend: false, marker: {color: c, size: 7, line: {color: css("--surface"), width: 1}},
+        error_y: {type: "data", array: di.map(i => p.err[i]), color: c, thickness: 1.2, width: 0},
+        hovertemplate: `${b} Rubin detection: %{y:.2f} ± %{error_y.array:.2f} at %{x:.2f} d<extra></extra>`});
+      const ni = p.t.map((_, i) => i).filter(i => !p.det[i] && p.lim5[i] != null);
+      if (ni.length) traces.push({x: ni.map(i => p.t[i]), y: ni.map(i => p.lim5[i]), type: "scatter", mode: "markers",
+        name: "Rubin non-detections (5σ limits)", legendgroup: "nondet", showlegend: !nondetShown, visible: "legendonly", legendrank: 2000,
+        marker: {color: c, size: 6, symbol: "triangle-down-open", opacity: 0.6},
+        hovertemplate: `${b} non-detection, 5σ limit %{y:.2f} at %{x:.2f} d<extra></extra>`});
+      if (ni.length) nondetShown = true;
+    }
+  }
+  const lo = Math.min(...allm, q.mag_lim) - 0.7, hi = Math.min(Math.max(...allm, q.mag_lim) + 0.7, 27.5);
+  const shade = (iv, color, layer = "below") => iv.map(([a, b]) => ({type: "rect", xref: "x", yref: "paper", x0: a, x1: b, y0: 0, y1: 1,
+    fillcolor: color, line: {width: 0}, layer}));
+  const vline = (x, dash) => ({type: "line", xref: "x", yref: "paper", x0: x, x1: x, y0: 0, y1: 1, line: {color: css("--ink2"), width: 1, dash}});
+  const shapes = [...shade(o.observable, css("--grid")), ...shade(o.followable, css("--accent") + "40"),
+    vline(0, "solid"), vline(q.t_min, "dash"), vline(q.t_max, "dash")];
+  const xr = [-30, q.t_max + 30];
+  Plotly.newPlot("p_lc", traces, layout({hovermode: "closest", shapes: [...shapes,
+      {type: "line", xref: "paper", yref: "y", x0: 0, x1: 1, y0: q.mag_lim, y1: q.mag_lim, line: {color: css(BAND_COLOR[q.band]), width: 1.2, dash: "dash"}}],
+    annotations: [{xref: "paper", yref: "y", x: 1, y: q.mag_lim, xanchor: "right", yanchor: "bottom", showarrow: false,
+                   text: `${q.band} limit ${q.mag_lim}`, font: {size: 11, color: css("--ink2")}}],
+    xaxis: {range: xr, title: {text: "days since first Rubin detection · grey: observable · blue: followable"}}, yaxis: {autorange: false, range: [hi, lo], title: {text: "AB magnitude"}, rangemode: "normal"},
+    legend: {orientation: "h", y: 1.18, x: 0, font: {size: 11, color: css("--ink2")}}}), CFG);
+}
+
 function render(r) {
   const q = r.query, G = groupsOf(r);
   const dets = r.totals.N_detected, fu = r.totals.N_followable;
@@ -394,6 +509,8 @@ function render(r) {
     <div class="tile"><div class="k">Fraction followable</div><div class="v">${dets > 0 ? (100 * fu / dets).toFixed(dets > 0 && fu / dets < 0.01 ? 2 : 1) + "%" : "–"}</div><div class="e">${q.band} ≤ ${q.mag_lim} · X ≤ ${q.airmass_max} · ${q.t_min}–${q.t_max} d</div></div>
     <div class="tile"><div class="k">Distinct followable objects per night</div><div class="v">${fmtN(r.per_night_mean)}</div><div class="e">mean over ${r.n_nights} nights</div></div>
   </div>
+  <div class="card"><h2>Sky distribution</h2><p class="cap">Mollweide projection in equatorial coordinates (RA increases to the left, 0h at the centre). Coloured: followable events first detected in the window; grey: a sample of detected events that are never followable. Dashed: declination limits reachable within the airmass limit from the site; dotted: Galactic plane. <b>Click an event</b> to see its light curve, Rubin photometry and visibility windows.${skyNote(r)}</p><div id="p_sky" class="plot" style="height:430px"></div></div>
+  <div class="card" id="objcard" hidden></div>
   ${r.by_year ? `<div class="card"><h2>Folding check: the window estimated from each survey year alone</h2><p class="cap">Expected followable events in this window if every year were like survey year N (error bars ±1σ); the line is the folded result. ${r.by_year.chi2 != null ? `Scatter χ²/dof = <b>${r.by_year.chi2.toFixed(1)} / ${r.by_year.dof}</b> (${foldVerdict(r.by_year.chi2, r.by_year.dof)}).` : ""} Years that differ beyond their errors are not equivalent for these cuts: drop them or keep folding off.</p><div id="p_year" class="plot" style="height:240px"></div></div>` : ""}
   <div class="card"><h2>Followable objects per night</h2><p class="cap">Expected number of distinct objects that meet all limits at least once during each night, stacked by class.</p><div id="p_night" class="plot"></div></div>
   <div class="card"><h2>Objects followable at each moment</h2><p class="cap">Expected number meeting all limits at each dark time step (all selected classes).</p><div id="p_inst" class="plot" style="height:240px"></div></div>
@@ -417,6 +534,8 @@ function render(r) {
       <li>SNII: all normal SNe II, 4 × the SNII-NMF rate (z ≤ 0.3 from the low-z sweep, z &gt; 0.3 from the full sweep). Errors grow when few simulated objects pass the cuts (see “sim” column).</li>
     </ul>
   </details>`;
+
+  renderSky(r, G);
 
   if (r.by_year) {
     const by = r.by_year, yl = by.years.map(y => `Y${y + 1}`);

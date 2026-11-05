@@ -132,7 +132,10 @@ def build_class_survey(args):
             hs = hs.set_index("SNID").loc[ids]
             parts.append(dict(ra=hs.RA.to_numpy(), dec=hs.DEC.to_numpy(), z=hs.REDSHIFT_HELIO.to_numpy(),
                               t_peak=hs.PEAKMJD.to_numpy(), weight=hs.WEIGHT.to_numpy() * mult, t_fd=tfd,
-                              mag=mag.astype(np.float16)))
+                              mag=mag.astype(np.float16),
+                              # provenance: lets the GUI fetch the full model curve and Rubin photometry
+                              sweep=np.full(len(ids), sweep.name), run=np.full(len(ids), run),
+                              snid=np.asarray(ids, dtype=str)))
         info.append({"sweep": sweep.name, "class_key": cfg["class_key"], "z_cut": [zmin, zmax], "multiplier": mult,
                      "dndz": cfg["dndz"], "N_exp_10yr": summ["N_exp"] * mult,
                      "N_det_10yr_sweep": summ["N_det_weighted"] * mult, "n_sim_selected": int(len(sel))})

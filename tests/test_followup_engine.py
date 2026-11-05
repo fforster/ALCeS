@@ -69,6 +69,21 @@ def test_engine_matches_brute_force(tmp_path):
     assert np.isclose(tot_engine, tot_brute, rtol=1e-6)
 
 
+def test_sky_points_and_object_detail_agree(tmp_path):
+    """Every followable event is on the sky map, and its detail view gives the same followable hours."""
+    _store(tmp_path)
+    engine.catalog.cache_clear(); engine.load.cache_clear()
+    q = engine.Query(classes=["X"], surveys=["WFD"], band="r", mag_lim=19.5, airmass_max=1.8, t_min=1.0, t_max=25.0,
+                     mjd_start=61000, mjd_end=61060, step_min=10)
+    r = engine.run(q, tmp_path)
+    sky = r["sky"]["followable"]
+    assert sky["n"] == r["classes"][0]["n_sim_followable"] > 0
+    for i in range(sky["n"]):
+        o = engine.object_detail(q, "X", "WFD", sky["idx"][i], sky["shift"][i], store=tmp_path)
+        assert abs(o["followable_hours"] - sky["hours"][i]) <= 0.005   # sky table rounds to 0.01 h
+        assert all(q.t_min - 1e-9 <= a and b <= q.t_max + q.step_min / 1440 + 1e-9 for a, b in o["followable"])
+
+
 def test_fold_years_preserves_rate(tmp_path):
     """Folding: a 1-year window holds one copy of every simulated object of the years used, weighted by
     1/(number of years used); the per-year breakdown reproduces the folded totals."""

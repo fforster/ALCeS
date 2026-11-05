@@ -25,6 +25,17 @@ Pole and Dome A/C to PEARL (Eureka, 80° N), and from Hawai'i to New Zealand. Co
 astropy observatory registry; the others are published site coordinates (~0.01°). Every site is a clickable dot
 on the map, and every control has a hover explanation.
 
+**Sky map and single events.** The results include a Mollweide sky map (equatorial; RA increases to the left).
+- It shows every followable event first detected in the window, coloured by class, plus a grey sample of detected
+  events that are never followable, the declination limits reachable within the airmass limit, and the Galactic
+  plane.
+- Clicking an event opens its noiseless model light curve per band (`model_dense`) and Rubin's photometry
+  (`phot_df`: detections with 1σ errors; 5σ limits of non-detections on request).
+- Shaded intervals show when it is observable from the site (night and airmass) and when it is followable (all
+  limits). Its followable hours equal the engine's count exactly (test).
+- The store records each event's sweep, run and SNID for this purpose. In folding mode the event and its Rubin
+  points are shifted by whole years, so the points show the cadence of the year it was simulated in.
+
 API: `GET /api/meta` (classes, surveys, bands, simulated date span, site presets) and `POST /api/run` with the
 fields of `engine.Query` (`lat, lon, height, classes, surveys, band, mag_lim, airmass_max, t_min, t_max,
 mjd_start, mjd_end, step_min, sun_alt, fold_years`). Python: `followup.engine.run(Query(...))`.

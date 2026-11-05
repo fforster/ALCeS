@@ -97,6 +97,128 @@ def _instances(d, q, years_used, t_survey0):
     return src, t_fd[src] + m * YEAR, w[src] / len(years_used), yr[src]
 
 
+MAX_SKY_FOLLOWABLE = 6000      # per class and survey
+MAX_SKY_BACKGROUND = 600
+
+
+def _sky_table(parts):
+    """Column-wise table of sky points (rounded to keep the JSON small); 'sampled' < 1 when a cap applied."""
+    if not parts:
+        return {"n": 0}
+    cat = lambda k: np.concatenate([np.asarray(p[k]) for p in parts]) if parts else np.zeros(0)  # noqa: E731
+    n = [len(p["idx"]) for p in parts]
+    return {
+        "n": int(sum(n)),
+        "cls": sum(([p["cls"]] * m for p, m in zip(parts, n)), []),
+        "survey": sum(([p["survey"]] * m for p, m in zip(parts, n)), []),
+        "idx": cat("idx").astype(int).tolist(), "shift": np.round(cat("shift"), 5).tolist(),
+        "ra": np.round(cat("ra"), 4).tolist(), "dec": np.round(cat("dec"), 4).tolist(),
+        "w": np.round(cat("w"), 4).tolist(), "hours": np.round(cat("hours"), 2).tolist(),
+        "first": [None if not np.isfinite(x) else round(float(x), 3) for x in cat("first")],
+        "sampled": {f"{p['cls']}_{p['survey']}": p["frac"] for p in parts},
+    }
+
+
+def _intervals(t, mask, step_days):
+    """Contiguous True runs of mask on grid t -> [[start, end], ...] (end = last step + one step)."""
+    if not mask.any():
+        return []
+    m = np.concatenate([[False], mask, [False]]).astype(int)
+    d = np.diff(m)
+    s, e = np.flatnonzero(d == 1), np.flatnonzero(d == -1) - 1
+    return [[float(t[a]), float(t[b] + step_days)] for a, b in zip(s, e)]
+
+
+@lru_cache(maxsize=8)
+def _run_tables(sweep: str, run: str):
+    """phot_df and model_dense of one ALCeS run (cached: clicks often hit the same run)."""
+    import pandas as pd
+    from .build import SWEEPS
+    rd = SWEEPS / sweep / "runs" / run
+    ph = pd.read_parquet(rd / "phot_df.parquet", columns=["SNID", "MJD", "FLT", "FLUXCAL", "FLUXCALERR", "PHOTFLAG"])
+    dn = pd.read_parquet(rd / "model_dense.parquet", columns=["SNID", "MJD", "FLT", "FLUX_MODEL"])
+    return ph.astype({"SNID": str}), dn.astype({"SNID": str})
+
+
+def object_detail(q: Query, cls: str, survey: str, idx: int, shift: float = 0.0, store: Path = STORE,
+                  pad_before: float = 30.0, pad_after: float = 30.0):
+    """Everything the GUI shows for one simulated event: model light curve, Rubin photometry and visibility windows.
+
+    `shift` (days, a whole number of years when folding) moves the event in time; the Rubin photometry is shifted
+    with it, i.e. it shows the cadence of the year the event was actually simulated in."""
+    cat = catalog(str(store))
+    d = load(cls, survey, str(store))
+    if not 0 <= idx < len(d["ra"]):
+        raise ValueError("object index out of range")
+    bands = cat["bands"]
+    zp = 31.4
+    ra, dec = float(d["ra"][idx]), float(d["dec"][idx])
+    t_fd = float(d["t_fd"][idx]) + shift
+    out = {"cls": cls, "survey": survey, "idx": idx, "shift_days": shift, "ra": ra, "dec": dec,
+           "z": float(d["z"][idx]), "t_fd": t_fd, "t_peak": float(d["t_peak"][idx]) + shift,
+           "weight_10yr": float(d["weight"][idx]), "bands": bands}
+    has_prov = "run" in d
+    if has_prov:
+        out.update(sweep=str(d["sweep"][idx]), run=str(d["run"][idx]), snid=str(d["snid"][idx]))
+    # --- light curves (relative to the first detection); the store's daily model mags are the fallback
+    model, phot = {}, {}
+    if has_prov:
+        ph, dn = _run_tables(out["sweep"], out["run"])
+        m = dn[dn.SNID == out["snid"]]
+        for b, g in m.groupby("FLT"):
+            g = g.sort_values("MJD")
+            f = g.FLUX_MODEL.to_numpy()
+            ok = f > 0
+            model[b] = {"t": np.round(g.MJD.to_numpy()[ok] + shift - t_fd, 3).tolist(),
+                        "mag": np.round(zp - 2.5 * np.log10(f[ok]), 3).tolist()}
+        p = ph[ph.SNID == out["snid"]]
+        for b, g in p.groupby("FLT"):
+            det = (g.PHOTFLAG.astype(int) & 4096) > 0
+            fl, er = g.FLUXCAL.to_numpy(), g.FLUXCALERR.to_numpy()
+            with np.errstate(divide="ignore", invalid="ignore"):
+                mag = np.where(fl > 0, zp - 2.5 * np.log10(fl), np.nan)
+                merr = 1.0857 * er / np.abs(fl)
+                lim5 = zp - 2.5 * np.log10(5 * er)
+            t = g.MJD.to_numpy() + shift - t_fd
+            phot[b] = {"t": np.round(t, 4).tolist(), "det": det.tolist(),
+                       "mag": [None if not np.isfinite(x) else round(float(x), 3) for x in mag],
+                       "err": [None if not np.isfinite(x) else round(float(x), 3) for x in merr],
+                       "lim5": [None if not np.isfinite(x) else round(float(x), 3) for x in lim5]}
+    else:
+        k = np.arange(cat["n_days"] + 1)
+        for i, b in enumerate(bands):
+            mm = d["mag"][idx, i].astype(float)
+            ok = np.isfinite(mm)
+            model[b] = {"t": k[ok].tolist(), "mag": np.round(mm[ok], 3).tolist()}
+    out["model"], out["phot"] = model, phot
+    # --- visibility on the query grid, from t_fd - pad_before to t_fd + t_max + pad_after
+    step = q.step_min / 1440.0
+    # same phase as the counting grid (which starts at mjd_start), so the followable hours agree exactly
+    t0 = q.mjd_start + np.floor((t_fd - pad_before - q.mjd_start) / step) * step
+    t1 = t_fd + q.t_max + pad_after
+    grid = astro.time_grid(t0, t1, q.step_min)
+    dark = astro.night_mask(grid, q.lat, q.lon, q.height, q.sun_alt)
+    alt = astro.altitude(ra, dec, astro.local_sidereal_deg(grid, q.lon), q.lat)
+    x = astro.airmass_from_alt(alt)
+    observable = dark & (x <= q.airmass_max)
+    # the same model magnitudes as the counting engine (store grid: daily from t_fd, linear interpolation)
+    b = bands.index(q.band)
+    magb = d["mag"][idx, b].astype(np.float32)
+    dt = grid - t_fd
+    kf = np.clip(dt, 0, cat["n_days"] - 1e-6)
+    kk = kf.astype(int)
+    m0, m1 = magb[kk], magb[np.minimum(kk + 1, cat["n_days"])]
+    with np.errstate(invalid="ignore"):
+        mag_q = np.where(np.isfinite(m0) & np.isfinite(m1), m0 + (kf - kk) * (m1 - m0), np.inf)
+    followable = observable & (dt >= q.t_min) & (dt <= q.t_max) & (mag_q <= q.mag_lim)
+    out["observable"] = [[a - t_fd, e - t_fd] for a, e in _intervals(grid, observable, step)]
+    out["followable"] = [[a - t_fd, e - t_fd] for a, e in _intervals(grid, followable, step)]
+    out["followable_hours"] = float(followable.sum() * q.step_min / 60.0)
+    out["query"] = {"band": q.band, "mag_lim": q.mag_lim, "airmass_max": q.airmass_max,
+                    "t_min": q.t_min, "t_max": q.t_max}
+    return out
+
+
 def _hist(x, w, bins):
     h = np.histogram(x, bins=bins, weights=w)[0]
     e = np.sqrt(np.histogram(x, bins=bins, weights=w ** 2)[0])
@@ -141,6 +263,8 @@ def run(q: Query, store: Path = STORE):
 
     ts_total = np.zeros(len(tn))
     per_class, ts_class, night_class = [], {}, {}
+    sky = {"followable": [], "detected": []}
+    rng = np.random.default_rng(12345)
     u_nights = np.unique(night_id[in_win]) if len(tn) else np.zeros(0, int)
 
     for name in q.classes:
@@ -222,6 +346,16 @@ def run(q: Query, store: Path = STORE):
                         for a, v in zip(nn, ws):
                             night_w[int(a)] = night_w.get(int(a), 0.0) + float(v)
             r = in_range
+            # sky map: every followable event, plus a sample of detected-but-not-followable ones for context
+            shift = t_fd - d["t_fd"][src]
+            for kind, sel_k, cap in (("followable", r & (hours > 0), MAX_SKY_FOLLOWABLE),
+                                     ("detected", r & (hours == 0), MAX_SKY_BACKGROUND)):
+                ii = np.flatnonzero(sel_k)
+                if len(ii) > cap:
+                    ii = np.sort(rng.choice(ii, cap, replace=False))
+                sky[kind].append({"cls": name, "survey": survey, "idx": src[ii], "shift": shift[ii],
+                                  "ra": ra[ii], "dec": dec[ii], "w": w[ii], "hours": hours[ii], "first": first[ii],
+                                  "frac": len(ii) / max(int(sel_k.sum()), 1)})
             # source id unique across surveys (copies of one simulated object are fully correlated)
             objs.append(dict(w=w[r], hours=hours[r], first=first[r], nights=nnights[r],
                              src=src[r] + (len(objs) << 32), yr=yr[r]))
@@ -311,6 +445,8 @@ def run(q: Query, store: Path = STORE):
             by_year["dof"] = int(ok.sum() - 1)
     return {
         "query": q.__dict__, "step_min_used": step, "by_year": by_year,
+        "sky": {k: _sky_table(v) for k, v in sky.items()},
+        "airmass_dec_band": [max(-90.0, q.lat - (zmax_deg - 0.5)), min(90.0, q.lat + (zmax_deg - 0.5))],
         "n_nights": n_nights, "dark_hours": dark_hours, "window_days": span,
         "totals": totals,
         "per_night_mean": (sum(sum(v) for v in night_series.values()) / n_nights) if n_nights else 0.0,

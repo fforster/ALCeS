@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import fields
+from functools import lru_cache
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -55,12 +56,41 @@ def meta():
             "bands": cat["bands"], "n_days": cat["n_days"], "mjd_range": [lo, hi],
             "entries": {k: {kk: v[kk] for kk in ("class", "survey", "n_sim", "N_det_10yr", "parts")}
                         for k, v in ent.items()},
-            "sites": [{"region": r, "name": n, "lat": la, "lon": lo, "height": h} for r, n, la, lo, h in SITES]}
+            "sites": [{"region": r, "name": n, "lat": la, "lon": lo, "height": h} for r, n, la, lo, h in SITES],
+            "galactic_plane": galactic_plane()}
 
 
 def engine_order():
     from .build import CLASSES
     return CLASSES
+
+
+class ObjectRequest(RunRequest):
+    cls: str
+    survey: str
+    idx: int = Field(ge=0)
+    shift: float = 0.0
+
+
+@app.post("/api/object")
+def api_object(req: ObjectRequest):
+    """Model light curve, Rubin photometry and visibility windows of one simulated event."""
+    q = engine.Query(**{f.name: getattr(req, f.name) for f in fields(engine.Query)})
+    if q.lon > 180:
+        q.lon -= 360
+    try:
+        return engine.object_detail(q, req.cls, req.survey, req.idx, req.shift, STORE["path"])
+    except (ValueError, FileNotFoundError, KeyError) as e:
+        raise HTTPException(400, str(e))
+
+
+@lru_cache(maxsize=1)
+def galactic_plane():
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+    import numpy as np
+    c = SkyCoord(l=np.arange(0, 361, 2.0) * u.deg, b=np.zeros(181) * u.deg, frame="galactic").icrs
+    return {"ra": np.round(c.ra.deg, 3).tolist(), "dec": np.round(c.dec.deg, 3).tolist()}
 
 
 @app.post("/api/run")
