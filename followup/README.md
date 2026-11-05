@@ -38,7 +38,9 @@ on the map, and every control has a hover explanation.
 
 API: `GET /api/meta` (classes, surveys, bands, simulated date span, site presets) and `POST /api/run` with the
 fields of `engine.Query` (`lat, lon, height, classes, surveys, band, mag_lim, airmass_max, t_min, t_max,
-mjd_start, mjd_end, step_min, sun_alt, fold_years`). Python: `followup.engine.run(Query(...))`.
+mjd_start, mjd_end, step_min, sun_alt, fold_years, fold_year_list`), and `POST /api/object` with the same fields
+plus `cls, survey, idx, shift` (taken from the `sky` table of a run). Python: `followup.engine.run(Query(...))` and
+`followup.engine.object_detail(...)`.
 
 ## Method
 
