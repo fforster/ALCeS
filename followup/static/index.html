@@ -54,6 +54,7 @@ button:disabled { opacity: .6; cursor: progress; }
 label.tip { cursor: help; text-decoration: underline dotted var(--muted); text-underline-offset: 3px; }
 .checks label.tip { cursor: pointer; text-decoration: none; }
 legend[title] { cursor: help; }
+th.tiph { cursor: help; text-decoration: underline dotted var(--muted); text-underline-offset: 3px; }
 .sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; margin-right: 6px; flex: none; }
 .links { font-size: 12px; margin: 4px 0 0; }
 .links a { color: var(--accent); cursor: pointer; margin-right: 10px; }
@@ -465,7 +466,19 @@ function render(r) {
   // table
   const rows = r.classes.map(c => [c.class, c.N_detected, c.N_detected_err, c.N_followable, c.N_followable_err,
     c.frac_followable, c.median_hours, c.median_nights, c.median_delay_days, c.n_sim_followable, c.n_sim_detected]);
-  $("tbl").innerHTML = `<thead><tr><th>Class</th><th>Detected</th><th>Followable</th><th title="relative error of the followable number">± rel.</th><th title="simulated objects behind the followable number">Sim. followable</th><th title="simulated objects behind the detected number">Sim. detected</th><th>% followable</th><th>Med. h</th><th>Med. nights</th><th>Med. delay d</th></tr></thead><tbody>` +
+  const COLS = [
+    ["Class", "Transient class (ALCeS native-rate simulation). Hover a class in the sidebar for its model."],
+    ["Detected", "Expected number of real events whose first Rubin detection falls in the window (selected surveys), ± the Poisson-like error from the simulation weights."],
+    ["Followable", "Expected number of those events that meet every follow-up limit (night, model magnitude, airmass, days since first detection) during at least one time step, ± error."],
+    ["± rel.", "Relative error of the followable number (error / value). Roughly 1/√(Sim. followable)."],
+    ["Sim. followable", "Distinct simulated objects behind the followable number (folded copies of one object count once). ⚠ marks fewer than 20: the number and its distributions are noisy."],
+    ["Sim. detected", "Distinct simulated objects behind the detected number."],
+    ["% followable", "Followable / detected, in percent."],
+    ["Med. h", "Median total dark hours during which a followable event meets all limits, within the min–max days since first detection (weighted by expected numbers)."],
+    ["Med. nights", "Median number of distinct nights on which a followable event meets all limits at least once."],
+    ["Med. delay d", "Median days from the first Rubin detection to the first time the event meets all limits."],
+  ];
+  $("tbl").innerHTML = `<thead><tr>${COLS.map(([h, t]) => `<th title="${t}" class="tiph">${h}</th>`).join("")}</tr></thead><tbody>` +
     rows.map(x => `<tr><td><span class="sw" style="background:${colorOf(group(x[0]))}"></span>${x[0]}</td><td>${fmtN(x[1])} ± ${fmtN(x[2])}</td><td>${fmtN(x[3])} ± ${fmtN(x[4])}</td><td>${relErr(x[4], x[3])}</td><td><b>${x[9] > 0 && x[9] < 20 ? "⚠ " : ""}${fmt(x[9])}</b></td><td>${fmt(x[10])}</td><td>${x[5] == null ? "–" : (100 * x[5]).toFixed(1)}</td><td>${fmt(x[6], 1)}</td><td>${fmt(x[7], 0)}</td><td>${fmt(x[8], 1)}</td></tr>`).join("") + "</tbody>";
   if (rows.some(x => x[9] > 0 && x[9] < 20))
     $("tbl").insertAdjacentHTML("afterend", `<p class="hint">⚠ fewer than 20 simulated objects pass the cuts: the number is uncertain (see ±) and its distributions are noisy. Native sweeps sample the whole volume, so bright (nearby) events are rare in them.</p>`);
