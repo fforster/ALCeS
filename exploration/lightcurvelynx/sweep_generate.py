@@ -48,7 +48,13 @@ def available_classes() -> list[str]:
     a medida que `vendor_snana_class.py` empaquete mas clases (Fase 75)."""
     out = []
     for class_key, cfg in CLASS_CONFIGS.items():
-        simsed_dir = Path(cfg.get("simsed_dir") or cfg["salt2_dir"])   # SNIa-SALT2 (2026-09-30): SALT2 model dir
+        model_dir = cfg.get("simsed_dir") or cfg.get("salt2_dir")   # SNIa-SALT2 (2026-09-30): SALT2 model dir
+        if model_dir is None:
+            # 2026-11-05: clases sin directorio de templates (LCLIB, etc.) -- no hay nada que verificar aqui;
+            # antes esto lanzaba KeyError('salt2_dir') y rompia sweep_generate para TODAS las clases.
+            out.append(class_key)
+            continue
+        simsed_dir = Path(model_dir)
         if simsed_dir.is_dir() and any(simsed_dir.iterdir()):
             out.append(class_key)
     return sorted(out)
