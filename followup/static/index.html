@@ -463,7 +463,7 @@ function renderObject(o) {
     stands for ${o.weight_10yr.toPrecision(3)} real events in 10 yr${yrs ? ` · <b>shifted ${yrs > 0 ? "+" : ""}${yrs} yr</b> from its simulated date (folding; the Rubin points show the cadence of the simulated year)` : ""}<br>
     <span style="color:var(--muted)">${prov}</span>
     <a style="float:right;color:var(--accent);cursor:pointer" id="objclose" title="Close this panel">close</a></p>
-    <p class="cap">Lines: noiseless model per band (thick: the follow-up band). Points: Rubin detections with 1σ errors (click a band in the legend to toggle its curve and points; non-detections are off by default). Vertical lines: first detection (solid) and the min–max days window (dashed); horizontal dashed: the magnitude limit. Background: <b>grey</b> = observable from the site (night and airmass ≤ ${q.airmass_max}); <b>blue</b> = followable (all limits met).</p>
+    <p class="cap">Lines: noiseless model per band (thick: the follow-up band). Points: Rubin detections with 1σ errors (click a band in the legend to toggle its curve and points; non-detections are off by default). Vertical lines: first detection (solid) and the min–max days window (dashed); horizontal dashed: the magnitude limit. The view stops 2 mag below the limit; double-click the plot to see everything. Background: <b>grey</b> = observable from the site (night and airmass ≤ ${q.airmass_max}); <b>blue</b> = followable (all limits met).</p>
     <div id="p_lc" class="plot" style="height:400px"></div>`;
   $("objclose").onclick = () => { card.hidden = true; LASTOBJ = null; };
   const traces = [];
@@ -492,7 +492,9 @@ function renderObject(o) {
       if (ni.length) nondetShown = true;
     }
   }
-  const lo = Math.min(...allm, q.mag_lim) - 0.7, hi = Math.min(Math.max(...allm, q.mag_lim) + 0.7, 27.5);
+  // default view: from the brightest model point down to at most 2 mag fainter than the follow-up limit
+  // (double-click the plot to autoscale to everything)
+  const lo = Math.min(...allm, q.mag_lim) - 0.7, hi = Math.min(Math.max(...allm, q.mag_lim) + 0.7, q.mag_lim + 2);
   const shade = (iv, color, layer = "below") => iv.map(([a, b]) => ({type: "rect", xref: "x", yref: "paper", x0: a, x1: b, y0: 0, y1: 1,
     fillcolor: color, line: {width: 0}, layer}));
   const vline = (x, dash) => ({type: "line", xref: "x", yref: "paper", x0: x, x1: x, y0: 0, y1: 1, line: {color: css("--ink2"), width: 1, dash}});
