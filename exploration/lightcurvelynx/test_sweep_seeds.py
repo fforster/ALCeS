@@ -42,6 +42,27 @@ def test_all_known_classes_have_distinct_blocks():
         S.check_unique_slots(["X", "X"])
 
 
+def test_keep_phot_detected_filters_photometry(tmp_path=None):
+    """Fase 90: keep_phot="detected" keeps phot rows of detected objects only; head_df stays complete."""
+    import tempfile
+    from pathlib import Path
+
+    import pandas as pd
+
+    import sweep_hash
+    from sweep_worker import filter_phot_to_detected
+    assert sweep_hash.normalize_keep_phot("detected") == "detected"
+    assert sweep_hash.normalize_keep_phot(True) is True and sweep_hash.normalize_keep_phot("false") is False
+    with pytest.raises(ValueError):
+        sweep_hash.normalize_keep_phot("sometimes")
+    d = Path(tmp_path or tempfile.mkdtemp())
+    pd.DataFrame({"SNID": ["1", "2", "3"], "DETECTED": [True, False, True]}).to_parquet(d / "head_df.parquet")
+    pd.DataFrame({"SNID": ["1", "1", "2", "2", "2", "3"], "MJD": range(6)}).to_parquet(d / "phot_df.parquet")
+    assert filter_phot_to_detected(d) == {"before": 6, "after": 3}
+    assert sorted(pd.read_parquet(d / "phot_df.parquet").SNID) == ["1", "1", "3"]
+    assert len(pd.read_parquet(d / "head_df.parquet")) == 3
+
+
 def test_build_runs_gives_each_class_its_own_seeds():
     from sweep_compile import build_runs
     cfg = {"classes": ["SNIa-SALT2", "SLSN-I"], "seeds": [200, 201],

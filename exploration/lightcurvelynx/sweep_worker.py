@@ -27,6 +27,25 @@ import sweep_hash
 from run_simsed_poc import HERE, main as run_simsed_main
 
 
+def filter_phot_to_detected(output_dir: Path) -> dict | None:
+    """Fase 90 (keep_phot="detected"): reescribe phot_df.parquet con solo las filas de los objetos detectados
+    (DETECTED en head_df). head_df sigue completo (eficiencias de deteccion exactas); la fotometria de objetos
+    nunca detectados (casi todo el volumen en DDF) no se guarda. Atomico: escribe un temporal y lo renombra.
+    Devuelve {"before": n, "after": m} o None si no habia phot_df/head_df."""
+    import pandas as pd
+    phot_path, head_path = output_dir / "phot_df.parquet", output_dir / "head_df.parquet"
+    if not (phot_path.exists() and head_path.exists()):
+        return None
+    head = pd.read_parquet(head_path, columns=["SNID", "DETECTED"])
+    det = set(head.loc[head["DETECTED"].astype(bool), "SNID"].astype(str))
+    phot = pd.read_parquet(phot_path)
+    keep = phot["SNID"].astype(str).isin(det)
+    tmp = phot_path.with_suffix(".parquet.tmp")
+    phot[keep].reset_index(drop=True).to_parquet(tmp, index=False)
+    os.replace(tmp, phot_path)
+    return {"before": int(len(phot)), "after": int(keep.sum())}
+
+
 def resolve_run(manifest: dict, index: int) -> dict:
     for r in manifest["runs"]:
         if r["index"] == index:
@@ -55,7 +74,7 @@ def run_one(manifest_path: Path, index: int) -> int:
     # Fase 81: opt-in de nivel-sweep leido del manifiesto completo (no de
     # `row`) -- evita que se cuele por error en el payload de run_hash(),
     # es politica de almacenamiento, no un parametro fisico de la corrida.
-    keep_phot = manifest.get("keep_phot", False)
+    keep_phot = sweep_hash.normalize_keep_phot(manifest.get("keep_phot", False))
     sweep_dir = manifest_path.parent
     row = resolve_run(manifest, index)
 
@@ -86,6 +105,7 @@ def run_one(manifest_path: Path, index: int) -> int:
 
     status = "done"
     error = None
+    phot_rows = None
     try:
         run_simsed_main(
             row["class_key"],
@@ -112,12 +132,21 @@ def run_one(manifest_path: Path, index: int) -> int:
     finally:
         # Fase 81: si el sweep pidio keep_phot=true, no se borra -- el
         # export por clase (Fase 82) necesita la fotometria cruda real.
-        cleaned = False if keep_phot else cleanup_phot_df(output_dir)
+        # Fase 90: keep_phot="detected" conserva solo las filas de objetos detectados.
+        if keep_phot == "detected":
+            cleaned = False
+            if status == "done":
+                phot_rows = filter_phot_to_detected(output_dir)
+            else:
+                cleaned = cleanup_phot_df(output_dir)
+        else:
+            cleaned = False if keep_phot else cleanup_phot_df(output_dir)
 
     finished_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     sweep_hash.write_json_atomic(run_hash_path, {
         **common, "status": status, "started_at": started_at, "finished_at": finished_at,
         "error": error, "phot_df_cleaned": cleaned, "phot_df_kept": keep_phot,
+        **({"phot_df_rows": phot_rows} if phot_rows else {}),
     })
     print(f"[{finished_at}] index={index} run_hash={row['run_hash']} status={status}"
           + (f" ({error.splitlines()[0]})" if error else ""))

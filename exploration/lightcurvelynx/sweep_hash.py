@@ -39,6 +39,21 @@ SCHEMA_VERSION = 1
 CODE_FILES = ["run_simsed_poc.py", "searcheff.py", "snana_params.py"]
 
 
+def normalize_keep_phot(value) -> bool | str:
+    """Politica de almacenamiento de phot_df (no entra al run_hash): False (borrar), True (conservar todo) o
+    "detected" (Fase 90: conservar solo las filas de objetos detectados)."""
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v == "detected":
+            return "detected"
+        if v in ("true", "yes", "1"):
+            return True
+        if v in ("false", "no", "0", ""):
+            return False
+        raise ValueError(f"keep_phot invalido: {value!r} (opciones: true, false, detected)")
+    return bool(value)
+
+
 def canonicalize(obj):
     """Convierte cualquier valor real de CLASS_CONFIGS a algo JSON-limpio y
     deterministico. Recursivo. Casos reales que maneja:

@@ -27,6 +27,7 @@ from pathlib import Path
 
 import yaml
 
+import sweep_hash
 from run_simsed_poc import CLASS_CONFIGS, HERE
 from sweep_compile import NGENTOT_WARN_THRESHOLD
 from sweep_history import record_event
@@ -85,7 +86,7 @@ def generate_sweep(
     resources: dict | None = None,
     max_concurrent: dict | None = None,
     partition: str = "general",
-    keep_phot: bool = False,
+    keep_phot: bool | str = False,
     description: str = "",
     force: bool = False,
     triggered_by: str = "cli",
@@ -138,7 +139,7 @@ def generate_sweep(
         # Fase 81: opt-in de nivel-sweep, siempre explicito en el archivo
         # generado (no omitido por default) para que quede visible en el
         # propio YAML que se pidio (o no se pidio) preservar fotometria.
-        "keep_phot": bool(keep_phot),
+        "keep_phot": sweep_hash.normalize_keep_phot(keep_phot),
     }
 
     SWEEPS_DIR.mkdir(parents=True, exist_ok=True)
@@ -152,7 +153,7 @@ def generate_sweep(
     record_event(
         "generate_sweep", triggered_by=triggered_by, sweep_name=sweep_name,
         classes=list(classes), seeds=list(seeds), ngentot_overrides=ngentot_overrides,
-        keep_phot=bool(keep_phot),
+        keep_phot=sweep_hash.normalize_keep_phot(keep_phot),
     )
     return out_path
 
@@ -175,6 +176,8 @@ if __name__ == "__main__":
     parser.add_argument("--ngentot", nargs="*", default=[], help="pares clase:numero, p.ej. SNIa-91bg:500")
     parser.add_argument("--wfd", action="store_true")
     parser.add_argument("--keep-phot", action="store_true", dest="keep_phot")
+    # Fase 90: conservar phot_df solo de objetos detectados (head_df completo)
+    parser.add_argument("--keep-phot-detected", action="store_const", const="detected", dest="keep_phot")
     parser.add_argument("--description", default="")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--list-classes", action="store_true", help="lista las clases disponibles y termina")

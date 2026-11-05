@@ -9657,3 +9657,23 @@ Verificado:
 Modificado: `sweep_compile.py` (traducción de semillas, `seed_scheme` en el manifiesto),
 `sweep_worker.py` (`seed_yaml`/`seed_scheme` en `run_hash.json`), `sweep_monitor.py` (columna de
 semilla más ancha). Nuevo: `sweep_seeds.py`, `test_sweep_seeds.py`. `NOTES.md`: esta entrada.
+
+## Fase 90 -- `keep_phot: detected`: fotometría solo de objetos detectados
+
+Para repetir los sweeps nativos de transientes con 5× más objetos (pedido del usuario, 2026-11-05),
+guardar `phot_df` completo costaría ~630 GB (local libre: 480 GB; cuota en Leftraru ~77 GB). Casi
+todo ese volumen es de objetos que Rubin nunca detecta: por ejemplo, 0.5% de las filas de CaRT DDF son
+de objetos detectados, y 45% en SLSN-I DDF.
+
+- **Nueva política** `keep_phot: detected` (YAML) / `--keep-phot-detected` (`sweep_generate.py`): al
+  terminar bien una corrida, `sweep_worker.filter_phot_to_detected()` reescribe `phot_df.parquet` de
+  forma atómica con solo las filas de los objetos con `DETECTED` en `head_df`.
+- **Se conserva:** `head_df` completo, así que las eficiencias de detección y los pesos siguen exactos,
+  y la fotometría de cada objeto detectado incluye sus épocas de no detección. Las curvas densas
+  (`dense_model_curves.py`) solo usan objetos detectados.
+- **Registro:** `run_hash.json` guarda `phot_df_rows: {before, after}`. Como `keep_phot`, es una
+  política de almacenamiento y no entra al `run_hash`.
+- **Proyección 5×:** fotometría 123 GB (vs 630 GB completa) + curvas densas 125 GB.
+
+Modificado: `sweep_worker.py`, `sweep_hash.py` (`normalize_keep_phot`), `sweep_compile.py`,
+`sweep_generate.py`. Test: `test_sweep_seeds.py::test_keep_phot_detected_filters_photometry`.
