@@ -53,6 +53,7 @@ def test_engine_matches_brute_force(tmp_path):
     assert np.isclose(c["N_followable"], d["weight"][fu].sum())
     assert np.isclose(c["N_detected"], d["weight"].sum())
     assert np.isclose(np.sum(c["hist_hours"]), d["weight"][fu].sum())
+    assert sum(c["hist_hours_nsim"]) == sum(c["hist_nights_nsim"]) == c["n_sim_followable"] == fu.sum()
     # weighted mean hours via histogram mass is coarse; compare total weighted hours via the time series instead
     tot_engine = np.sum(r["timeseries"]["total"]) * q.step_min / 60   # only steps inside [T0, T1], thinned = none here
     ts_mask = grid[dark] <= q.mjd_end

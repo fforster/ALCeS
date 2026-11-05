@@ -223,6 +223,13 @@ def run(q: Query, store: Path = STORE):
         nh, ne = _hist(o["nights"][fu], o["w"][fu], nights_bins)
         wf = o["w"][fu]
 
+        def nsim_hist(x, bins):
+            """distinct simulated objects per bin (folded copies of one object count once per bin)."""
+            ib = np.digitize(x, bins) - 1
+            ok = (ib >= 0) & (ib < len(bins) - 1)
+            pairs = np.unique(np.stack([ib[ok], o["src"][fu][ok]]), axis=1) if ok.any() else np.zeros((2, 0), int)
+            return np.bincount(pairs[0], minlength=len(bins) - 1)[: len(bins) - 1].astype(int).tolist()
+
         def wq(x, p):
             if not fu.any():
                 return None
@@ -240,6 +247,9 @@ def run(q: Query, store: Path = STORE):
             "hist_hours": hh.tolist(), "hist_hours_err": he.tolist(),
             "hist_delay": dh.tolist(), "hist_delay_err": de.tolist(),
             "hist_nights": nh.tolist(), "hist_nights_err": ne.tolist(),
+            "hist_hours_nsim": nsim_hist(o["hours"][fu], hours_bins),
+            "hist_delay_nsim": nsim_hist(o["first"][fu], delay_bins),
+            "hist_nights_nsim": nsim_hist(o["nights"][fu], nights_bins),
         })
         ts_class[name] = ts
         night_class[name] = night_w
@@ -251,6 +261,7 @@ def run(q: Query, store: Path = STORE):
     nights = [int(n) for n in u_nights]
     night_series = {c: [night_class[c].get(n, 0.0) for n in nights] for c in night_class}
     totals = {k: float(sum(pc[k] for pc in per_class)) for k in ("N_detected", "N_followable")}
+    totals.update({k: int(sum(pc[k] for pc in per_class)) for k in ("n_sim_detected", "n_sim_followable")})
     n_nights = len(nights)
     dark_hours = float(in_win.sum() * step / 60.0)
     return {
