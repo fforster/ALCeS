@@ -100,11 +100,11 @@ def format_status(rows: list[dict]) -> str:
         counts[r["status"]] = counts.get(r["status"], 0) + 1
 
     lines = []
-    lines.append(f"{'IDX':>4}  {'RUN_HASH':<14}{'CLASE':<26}{'SEED':>5}  {'TIER':<26}{'STATUS':<16}DETALLE")
+    lines.append(f"{'IDX':>4}  {'RUN_HASH':<14}{'CLASE':<26}{'SEED':>11}  {'TIER':<26}{'STATUS':<16}DETALLE")
     for r in sorted(rows, key=lambda x: x["index"]):
         detail = (r["detail"] or "").splitlines()[0][:60] if r["detail"] else ""
         lines.append(
-            f"{r['index']:>4}  {r['run_hash']:<14}{r['class_key']:<26}{r['seed_index']:>5}  "
+            f"{r['index']:>4}  {r['run_hash']:<14}{r['class_key']:<26}{r['seed_index']:>11}  "
             f"{r['tier']:<26}{r['status']:<16}{detail}"
         )
     lines.append("")

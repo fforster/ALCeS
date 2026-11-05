@@ -9610,3 +9610,50 @@ Modificado: `sweep_launch.py` (`record_event`), `webapp/app.py` (`slurm_availabl
 real en `sweep_run()`, `launched` en `sweep_status()`), `webapp/templates/sweep_status.html`
 (mensaje según camino real, fix de `TERMINAL`), `webapp/templates/history.html` (detalle de
 `launch_sweep`). `NOTES.md`: esta entrada.
+
+## Fase 89 -- semillas propias por (clase, estrategia) en los sweeps (`sweep_seeds.py`)
+
+**Problema real (encontrado 2026-11-05 en la herramienta de follow-up de LSST_sim_lcs).**
+`run_simsed_poc.main()` deriva todas las semillas de `seed_base = SEED_BASE + seed_index * 1_000_000`,
+sin la clase. Los sweeps nativos de producción usaban las mismas semillas para todas las clases
+(DDF `100..119`, WFD `200..239`, generadas por `class_pipeline`).
+- Consecuencia: el objeto *k* de la corrida con semilla *s* tenía la **misma posición (RA, Dec), el
+  mismo t0 y el mismo cuantil de redshift** en las 16 clases.
+- Medido: ~5,200 de 5,937 posiciones de SNIa WFD detectadas coinciden exactamente con SLSN-I (también
+  con SNII y TDE), con diferencia de tiempo de pico 0 d (la mediana entre pares al azar es ~1,080 d).
+- Cada clase seguía siendo una muestra válida por sí sola, pero las clases no eran realizaciones
+  independientes: los errores de sumas entre clases están correlacionados y las coincidencias de
+  posición/tiempo entre clases son un artefacto.
+- Los modos de entrenamiento (`tools/logz/plan_wave.py`, `train_sample.py`, `tools/nt/nt_common.py`)
+  ya evitaban esto metiendo la clase en `seed_index`; los sweeps nativos no.
+
+**Solución (sin tocar `main()`).** `sweep_compile.build_runs()` traduce cada semilla del YAML a una
+semilla efectiva propia de (clase, estrategia):
+
+    seed_index = 1e8 + 1e4 * (sha256("<clase>|<WFD|DDF>") mod 900000) + semilla_yaml,   0 <= semilla_yaml < 1e4
+
+- **Rango:** [1e8, ~9.1e9], muy por encima de las semillas de entrenamiento (< ~2.2e7), así que tampoco
+  se repiten objetos entre corridas nativas y de entrenamiento. `seed_base` < 1e16 (cabe en int64).
+- **Colisiones:** `check_unique_slots()` verifica en cada compilación que las 33 clases de
+  `CLASS_CONFIGS` × {WFD, DDF} tengan bloques distintos. Una clase nueva que colisionara detiene la
+  compilación.
+- **Reproducibilidad:** la semilla efectiva entra al `run_hash` (así una corrida nueva nunca se
+  confunde con una vieja), al manifiesto y a `run_hash.json` (`seed_index`, más `seed_yaml` y
+  `seed_scheme`). `tools/dense_model_curves.py` y la reanudación de sweeps leen `seed_index` de ahí y
+  siguen funcionando.
+- **Sweeps viejos:** `seed_scheme: legacy` en el YAML reproduce el comportamiento anterior (la semilla
+  del YAML tal cual). El default es `per_class`. Los YAML de producción existentes (semillas 100..239)
+  son válidos sin cambios.
+- **Fuera de alcance:** las llamadas directas a `main()` (sbatch manuales, scripts de entrenamiento)
+  no pasan por el compilador y deben seguir eligiendo semillas únicas por clase, como ya hacen los
+  modos de entrenamiento.
+
+Verificado:
+- `test_sweep_seeds.py` (5 tests): semillas distintas entre clases y estrategias, rango, legacy
+  intacto, bloques únicos para todas las clases, `build_runs()` con `run_hash` distintos de legacy.
+- Corrida real de KN-K17 y CaRT (WFD, semilla YAML 200, 40 objetos): con `legacy`, las dos clases
+  repiten posiciones y t0; con `per_class`, ninguna posición coincide.
+
+Modificado: `sweep_compile.py` (traducción de semillas, `seed_scheme` en el manifiesto),
+`sweep_worker.py` (`seed_yaml`/`seed_scheme` en `run_hash.json`), `sweep_monitor.py` (columna de
+semilla más ancha). Nuevo: `sweep_seeds.py`, `test_sweep_seeds.py`. `NOTES.md`: esta entrada.

@@ -25,6 +25,7 @@ from pathlib import Path
 import yaml
 
 import sweep_hash
+import sweep_seeds
 from sweep_history import record_event
 from run_simsed_poc import CLASS_CONFIGS, HERE, NGENTOT_LC
 
@@ -63,6 +64,13 @@ def build_runs(sweep_cfg: dict, code_hash_value: str) -> list[dict]:
         raise ValueError(
             f"clases desconocidas (no estan en CLASS_CONFIGS real de run_simsed_poc.py): {unknown}"
         )
+    # 2026-11-05: semillas propias de cada (clase, estrategia), ver sweep_seeds.py. Sin esto, dos clases con el
+    # mismo seed_index comparten posiciones, t0 y cuantiles de redshift objeto a objeto.
+    seed_scheme = sweep_cfg.get("seed_scheme", sweep_seeds.DEFAULT_SCHEME)
+    if seed_scheme not in sweep_seeds.SCHEMES:
+        raise ValueError(f"seed_scheme desconocido: {seed_scheme!r} (opciones: {sweep_seeds.SCHEMES})")
+    if seed_scheme == "per_class":
+        sweep_seeds.check_unique_slots(CLASS_CONFIGS)
 
     rows = []
     for class_key in classes:
@@ -75,7 +83,9 @@ def build_runs(sweep_cfg: dict, code_hash_value: str) -> list[dict]:
         for mode in modes:
             wfd = bool(mode.get("wfd", False))
             simsed_t0_mode = mode.get("simsed_t0_mode", "bolometric_peak")
-            for seed_index in seeds:
+            for seed_yaml in seeds:
+                # seed_index = semilla efectiva que recibe main() (y que entra al run_hash); seed_yaml = la del YAML
+                seed_index = sweep_seeds.effective_seed(class_key, wfd, seed_yaml, seed_scheme)
                 full, short = sweep_hash.run_hash(
                     class_key=class_key, class_config=cfg, seed_index=seed_index,
                     wfd=wfd, simsed_t0_mode=simsed_t0_mode, ngentot=ngentot,
@@ -83,7 +93,8 @@ def build_runs(sweep_cfg: dict, code_hash_value: str) -> list[dict]:
                 )
                 rows.append(dict(
                     run_hash=short, run_hash_full=full, class_key=class_key,
-                    seed_index=seed_index, wfd=wfd, simsed_t0_mode=simsed_t0_mode,
+                    seed_index=seed_index, seed_yaml=int(seed_yaml), seed_scheme=seed_scheme,
+                    wfd=wfd, simsed_t0_mode=simsed_t0_mode,
                     ngentot=ngentot, tier=tier,
                 ))
 
@@ -201,6 +212,8 @@ def compile_sweep(yaml_path: Path, force: bool = False, triggered_by: str = "cli
         code_hash=code_hash_value,
         code_files=sweep_hash.CODE_FILES,
         hash_schema_version=sweep_hash.SCHEMA_VERSION,
+        # 2026-11-05: como se tradujeron las semillas del YAML a seed_index (ver sweep_seeds.py)
+        seed_scheme=sweep_cfg.get("seed_scheme", sweep_seeds.DEFAULT_SCHEME),
         n_runs=len(rows),
         resource_tiers=resources,
         max_concurrent=max_concurrent,

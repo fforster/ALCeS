@@ -66,6 +66,9 @@ def run_one(manifest_path: Path, index: int) -> int:
     common = dict(
         run_hash=row["run_hash"], run_hash_full=row["run_hash_full"],
         class_key=row["class_key"], seed_index=row["seed_index"], wfd=row["wfd"],
+        # 2026-11-05: semilla del YAML y esquema (seed_index es la efectiva que recibe main(); manifiestos viejos
+        # no tienen estos campos y su seed_index es directamente la del YAML)
+        seed_yaml=row.get("seed_yaml", row["seed_index"]), seed_scheme=row.get("seed_scheme", "legacy"),
         simsed_t0_mode=row["simsed_t0_mode"], ngentot=row["ngentot"], tier=row["tier"],
         sweep_name=sweep_name, code_hash=manifest["code_hash"],
         node=socket.gethostname(),
