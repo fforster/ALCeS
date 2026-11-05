@@ -1,0 +1,267 @@
+"""Follow-up potential of Rubin-detected transients from a ground site (native-rate ALCeS simulations).
+
+Steps (per request):
+ 0. time grid [T0, T1 + t_max] with step dt;
+ 1. keep the steps where the Sun is below `sun_alt` (astronomical night by default) at the site;
+ 2. for each simulated detected object whose first Rubin detection t_fd falls in [T0 - t_max, T1], and each night
+    step t with t_min <= t - t_fd <= t_max, interpolate the noiseless MODEL magnitude in `band` and require
+    m <= mag_lim;
+ 3. require airmass(t) <= airmass_max at the site;
+ 4. per object: hours and nights it is followable, delay from first detection to the first opportunity;
+ 5. counts are expected REAL events: every simulated object carries a weight (real events per 10 yr represented by it,
+    native SNANA rates x footprint); a sum of weights over any selection is the expected number, with Poisson-like
+    error sqrt(sum w^2).
+Instantaneous counts N(t) cover t in [T0, T1]; per-object statistics cover the objects first detected in [T0, T1]
+(followed up to t_fd + t_max even beyond T1, so they are not truncated).
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from functools import lru_cache
+from pathlib import Path
+
+import numpy as np
+
+from . import astro
+
+STORE = Path("~/data/alces_followup").expanduser()
+MAX_PAIRS = 8_000_000
+
+
+@dataclass
+class Query:
+    lat: float = -30.2446            # Cerro Pachon
+    lon: float = -70.7494
+    height: float = 2700.0
+    classes: list = field(default_factory=lambda: ["SNIa", "SNII"])
+    surveys: list = field(default_factory=lambda: ["WFD"])
+    band: str = "r"
+    mag_lim: float = 20.0
+    airmass_max: float = 2.0
+    t_min: float = 0.0               # days since first detection
+    t_max: float = 30.0
+    mjd_start: float = 61400.0
+    mjd_end: float = 61765.0
+    step_min: float = 15.0
+    sun_alt: float = -18.0
+    fold_years: bool = True          # use all survey years, shifted by whole years into the window (10x statistics)
+
+
+@lru_cache(maxsize=None)
+def catalog(store: str = str(STORE)):
+    return json.loads((Path(store) / "catalog.json").read_text())
+
+
+@lru_cache(maxsize=64)
+def load(name: str, survey: str, store: str = str(STORE)):
+    d = np.load(Path(store) / f"{name}_{survey}.npz")
+    return {k: d[k] for k in d.files}
+
+
+YEAR = 365.25
+
+
+def _instances(d, q, entry):
+    """(source index, first-detection MJD, weight) of the objects used for this query.
+
+    fold_years=False: the simulated objects at their simulated dates.
+    fold_years=True : every simulated object is also placed at t_fd + m * 365.25 d for every integer m that lands in
+    [T0 - t_max, T1]; RA/Dec, light curve and the Sun-object geometry are unchanged by a whole-year shift, so the
+    window sees a "typical survey year" built from all the survey years, with each copy weighted by
+    365.25 / (survey span) so that the expected rate is preserved (sum of weights per year = N_10yr / span_years)."""
+    t_fd, w = d["t_fd"], d["weight"]
+    n = len(t_fd)
+    if not q.fold_years:
+        return np.arange(n), t_fd, w
+    span = entry["survey_years"] * YEAR
+    lo, hi = q.mjd_start - q.t_max, q.mjd_end
+    m0 = np.ceil((lo - t_fd) / YEAR).astype(int)
+    m1 = np.floor((hi - t_fd) / YEAR).astype(int)
+    cnt = np.maximum(m1 - m0 + 1, 0)
+    src = np.repeat(np.arange(n), cnt)
+    m = np.repeat(m0, cnt) + (np.arange(cnt.sum()) - np.repeat(np.cumsum(cnt) - cnt, cnt))
+    return src, t_fd[src] + m * YEAR, w[src] * (YEAR / span)
+
+
+def _hist(x, w, bins):
+    h = np.histogram(x, bins=bins, weights=w)[0]
+    e = np.sqrt(np.histogram(x, bins=bins, weights=w ** 2)[0])
+    return h, e
+
+
+def run(q: Query, store: Path = STORE):
+    cat = catalog(str(store))
+    bands = cat["bands"]
+    n_days = cat["n_days"]
+    if q.band not in bands:
+        raise ValueError(f"band must be one of {bands}")
+    if not (0 <= q.t_min < q.t_max <= n_days):
+        raise ValueError(f"need 0 <= t_min < t_max <= {n_days} d")
+    if q.mjd_end <= q.mjd_start:
+        raise ValueError("mjd_end must be after mjd_start")
+    span = q.mjd_end - q.mjd_start
+    step = max(q.step_min, 1.0)
+    # keep the grid manageable for long windows
+    step = max(step, (span + q.t_max) * 1440.0 / 400_000)
+    b = bands.index(q.band)
+
+    grid = astro.time_grid(q.mjd_start, q.mjd_end + q.t_max, step)
+    night = astro.night_mask(grid, q.lat, q.lon, q.height, q.sun_alt)
+    tn = grid[night]
+    lst = astro.local_sidereal_deg(tn, q.lon) if len(tn) else np.zeros(0)
+    night_id = np.floor(tn + q.lon / 360.0 - 0.5).astype(np.int64)     # changes at local noon
+    in_win = tn <= q.mjd_end
+    phi = np.radians(q.lat)
+    # min zenith distance |dec - lat| must allow airmass <= airmass_max (plane-parallel is fine for a pre-cut)
+    zmax_deg = np.degrees(np.arccos(1.0 / q.airmass_max)) + 0.5
+
+    # followable objects have >= 1 step; log bins from one step to the longest possible (12 h per night)
+    hours_bins = np.geomspace(0.999 * step / 60.0, max((q.t_max - q.t_min + 1) * 12.0, 1.0), 25)
+    delay_bins = np.linspace(q.t_min, q.t_max, 31)
+    nights_bins = np.arange(0, int(np.ceil(q.t_max - q.t_min)) + 3) - 0.5
+
+    ts_total = np.zeros(len(tn))
+    per_class, ts_class, night_class = [], {}, {}
+    u_nights = np.unique(night_id[in_win]) if len(tn) else np.zeros(0, int)
+
+    for name in q.classes:
+        ts = np.zeros(len(tn))
+        objs = []   # per-object arrays for t_fd in [T0, T1]
+        n_sim_det = n_inst_det = 0
+        w_det = w2_det = 0.0
+        night_w = {}
+        for survey in q.surveys:
+            key = f"{name}_{survey}"
+            if key not in cat["entries"]:
+                continue
+            d = load(name, survey, str(store))
+            # instances: the simulated objects themselves, or (fold_years) copies shifted by whole years
+            src, t_fd, w = _instances(d, q, cat["entries"][key])
+            ra, dec = d["ra"][src], d["dec"][src]
+            in_range = (t_fd >= q.mjd_start) & (t_fd <= q.mjd_end)
+            n_sim_det += int(len(np.unique(src[in_range])))
+            n_inst_det += int(in_range.sum())
+            w_det += float(w[in_range].sum())
+            w2_det += float((w[in_range] ** 2).sum())
+            cand = (t_fd >= q.mjd_start - q.t_max) & (t_fd <= q.mjd_end)
+            cand &= np.abs(dec - q.lat) <= zmax_deg
+            k0, k1 = int(np.floor(q.t_min)), int(np.ceil(q.t_max))
+            magb = d["mag"][:, b, :]
+            magmin = np.min(magb[:, k0:k1 + 1].astype(np.float32), axis=1)
+            cand &= magmin[src] <= q.mag_lim
+            idx = np.flatnonzero(cand)
+            # every object in range gets a stats row (zeros if never followable)
+            hours = np.zeros(len(t_fd))
+            first = np.full(len(t_fd), np.nan)
+            nnights = np.zeros(len(t_fd))
+            if len(idx) and len(tn):
+                lo = np.searchsorted(tn, t_fd[idx] + q.t_min)
+                hi = np.searchsorted(tn, t_fd[idx] + q.t_max, side="right")
+                cnt = np.maximum(hi - lo, 0)
+                # chunk the objects so that the (object, time) pairs stay bounded
+                csum = np.cumsum(cnt)
+                starts = np.searchsorted(csum, np.arange(0, csum[-1] if len(csum) else 0, MAX_PAIRS), side="right")
+                bounds = list(starts) + [len(idx)]
+                for c0, c1 in zip(bounds[:-1], bounds[1:]):
+                    if c1 <= c0:
+                        continue
+                    sl = slice(c0, c1)
+                    o_loc = np.repeat(np.arange(c0, c1), cnt[sl])
+                    if not len(o_loc):
+                        continue
+                    j = np.concatenate([np.arange(a, z) for a, z in zip(lo[sl], hi[sl])])
+                    o = idx[o_loc]
+                    dt = tn[j] - t_fd[o]
+                    kf = np.clip(dt, 0, n_days - 1e-6)
+                    k = kf.astype(np.int64)
+                    f = (kf - k).astype(np.float32)
+                    m0 = magb[src[o], k].astype(np.float32)
+                    m1 = magb[src[o], np.minimum(k + 1, n_days)].astype(np.float32)
+                    with np.errstate(invalid="ignore"):
+                        m = np.where(np.isfinite(m0) & np.isfinite(m1), m0 + f * (m1 - m0), np.inf)
+                    ok = m <= q.mag_lim
+                    o, j, dt = o[ok], j[ok], dt[ok]
+                    dec_r = np.radians(dec[o])
+                    ha = np.radians(lst[j] - ra[o])
+                    sin_alt = np.sin(phi) * np.sin(dec_r) + np.cos(phi) * np.cos(dec_r) * np.cos(ha)
+                    alt = np.degrees(np.arcsin(np.clip(sin_alt, -1, 1)))
+                    x = 1.0 / np.sin(np.radians(alt + 244.0 / (165.0 + 47.0 * np.abs(alt) ** 1.1)))
+                    ok = (alt > 0) & (x <= q.airmass_max)
+                    o, j, dt = o[ok], j[ok], dt[ok]
+                    if not len(o):
+                        continue
+                    ts += np.bincount(j, weights=w[o], minlength=len(tn))
+                    hours += np.bincount(o, minlength=len(t_fd)) * step / 60.0
+                    np.fmin.at(first, o, dt)
+                    on = np.unique(np.stack([o, night_id[j]]), axis=1)
+                    nnights += np.bincount(on[0], minlength=len(t_fd))
+                    # distinct objects per night (only nights inside the window)
+                    sel_n = np.isin(on[1], u_nights)
+                    if sel_n.any():
+                        nn, inv = np.unique(on[1][sel_n], return_inverse=True)
+                        ws = np.bincount(inv, weights=w[on[0][sel_n]])
+                        for a, v in zip(nn, ws):
+                            night_w[int(a)] = night_w.get(int(a), 0.0) + float(v)
+            r = in_range
+            # source id unique across surveys (copies of one simulated object are fully correlated)
+            objs.append(dict(w=w[r], hours=hours[r], first=first[r], nights=nnights[r],
+                             src=src[r] + (len(objs) << 32)))
+        if not objs:
+            continue
+        o = {k: np.concatenate([x[k] for x in objs]) for k in objs[0]}
+        fu = o["hours"] > 0
+
+        def src_err(sel):
+            """sqrt(sum over simulated objects of (sum of their copies' weights)^2)."""
+            if not sel.any():
+                return 0.0
+            _, inv = np.unique(o["src"][sel], return_inverse=True)
+            return float(np.sqrt((np.bincount(inv, weights=o["w"][sel]) ** 2).sum()))
+        hh, he = _hist(o["hours"][fu], o["w"][fu], hours_bins)
+        dh, de = _hist(o["first"][fu], o["w"][fu], delay_bins)
+        nh, ne = _hist(o["nights"][fu], o["w"][fu], nights_bins)
+        wf = o["w"][fu]
+
+        def wq(x, p):
+            if not fu.any():
+                return None
+            s = np.argsort(x)
+            c = np.cumsum(wf[s]) / wf.sum()
+            return float(x[s][np.searchsorted(c, p)])
+        per_class.append({
+            "class": name, "n_sim_detected": n_sim_det, "n_sim_followable": int(len(np.unique(o["src"][fu]))),
+            "n_instances_detected": n_inst_det, "n_instances_followable": int(fu.sum()),
+            "N_detected": w_det, "N_detected_err": src_err(np.ones(len(fu), bool)),
+            "N_followable": float(wf.sum()), "N_followable_err": src_err(fu),
+            "frac_followable": float(wf.sum() / w_det) if w_det > 0 else None,
+            "median_hours": wq(o["hours"][fu], 0.5), "median_nights": wq(o["nights"][fu], 0.5),
+            "median_delay_days": wq(o["first"][fu], 0.5),
+            "hist_hours": hh.tolist(), "hist_hours_err": he.tolist(),
+            "hist_delay": dh.tolist(), "hist_delay_err": de.tolist(),
+            "hist_nights": nh.tolist(), "hist_nights_err": ne.tolist(),
+        })
+        ts_class[name] = ts
+        night_class[name] = night_w
+        ts_total += ts
+
+    # instantaneous counts on night steps inside [T0, T1]; thin to <= 6000 points for plotting
+    sel = np.flatnonzero(in_win)
+    thin = sel[:: max(1, len(sel) // 6000)] if len(sel) else sel
+    nights = [int(n) for n in u_nights]
+    night_series = {c: [night_class[c].get(n, 0.0) for n in nights] for c in night_class}
+    totals = {k: float(sum(pc[k] for pc in per_class)) for k in ("N_detected", "N_followable")}
+    n_nights = len(nights)
+    dark_hours = float(in_win.sum() * step / 60.0)
+    return {
+        "query": q.__dict__, "step_min_used": step,
+        "n_nights": n_nights, "dark_hours": dark_hours, "window_days": span,
+        "totals": totals,
+        "per_night_mean": (sum(sum(v) for v in night_series.values()) / n_nights) if n_nights else 0.0,
+        "classes": per_class,
+        "bins": {"hours": hours_bins.tolist(), "delay": delay_bins.tolist(), "nights": nights_bins.tolist()},
+        "timeseries": {"mjd": tn[thin].tolist(), "total": ts_total[thin].tolist(),
+                       "by_class": {c: v[thin].tolist() for c, v in ts_class.items()}},
+        # night label = MJD of the local noon that starts the night
+        "nightly": {"night_mjd": [n + 0.5 - q.lon / 360.0 for n in nights], "by_class": night_series},
+    }
