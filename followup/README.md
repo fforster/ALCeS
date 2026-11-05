@@ -20,6 +20,11 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_followup_*.py
   `LSST_sim_lcs/tools` (for `expected_counts.py`).
 - The GUI serves plotly.js from the plotly Python package. Leaflet and the OpenStreetMap tiles need network access.
 
+The GUI's site presets are in `followup/sites.py`: 74 optical/IR observatories in 10 regions, from the South
+Pole and Dome A/C to PEARL (Eureka, 80° N), and from Hawai'i to New Zealand. Coordinates marked [a] come from the
+astropy observatory registry; the others are published site coordinates (~0.01°). Every site is a clickable dot
+on the map, and every control has a hover explanation.
+
 API: `GET /api/meta` (classes, surveys, bands, simulated date span, site presets) and `POST /api/run` with the
 fields of `engine.Query` (`lat, lon, height, classes, surveys, band, mag_lim, airmass_max, t_min, t_max,
 mjd_start, mjd_end, step_min, sun_alt, fold_years`). Python: `followup.engine.run(Query(...))`.

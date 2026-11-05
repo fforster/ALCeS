@@ -51,6 +51,9 @@ button:disabled { opacity: .6; cursor: progress; }
 #map { height: 190px; border-radius: 8px; border: 1px solid var(--ring); margin-bottom: 8px; }
 .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; }
 .checks label { display: flex; align-items: center; color: var(--ink); cursor: pointer; }
+label.tip { cursor: help; text-decoration: underline dotted var(--muted); text-underline-offset: 3px; }
+.checks label.tip { cursor: pointer; text-decoration: none; }
+legend[title] { cursor: help; }
 .sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; margin-right: 6px; flex: none; }
 .links { font-size: 12px; margin: 4px 0 0; }
 .links a { color: var(--accent); cursor: pointer; margin-right: 10px; }
@@ -200,9 +203,15 @@ try { const t = localStorage.getItem("fu-theme"); if (t) document.documentElemen
 async function init() {
   META = await (await fetch("api/meta")).json();
   const site = $("site");
-  for (const k of Object.keys(META.sites)) site.add(new Option(k, k));
+  const groups = {};
+  META.sites.forEach((s, i) => {
+    if (!groups[s.region]) { groups[s.region] = document.createElement("optgroup"); groups[s.region].label = s.region; site.append(groups[s.region]); }
+    const o = new Option(s.name, String(i));
+    o.title = `${s.name}: lat ${s.lat.toFixed(3)}°, lon ${s.lon.toFixed(3)}°, ${s.height} m`;
+    groups[s.region].append(o);
+  });
   site.add(new Option("Custom (map / fields)", "custom"));
-  site.onchange = () => { if (site.value !== "custom") setSite(META.sites[site.value]); };
+  site.onchange = () => { if (site.value !== "custom") setSite(META.sites[+site.value]); };
   for (const b of META.bands) $("band").add(new Option(b, b));
   $("band").value = "r";
   const cl = $("classes");
@@ -228,14 +237,87 @@ async function init() {
   L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom: 12,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
   map.on("click", e => { site.value = "custom"; setSite({lat: e.latlng.lat, lon: ((e.latlng.lng + 540) % 360) - 180, height: 0}); });
+  // every preset observatory as a small dot: hover for its name, click to select it
+  META.sites.forEach((s, i) => {
+    L.circleMarker([s.lat, s.lon], {radius: 4, color: "#ffffff", weight: 1, fillColor: "#52514e", fillOpacity: 0.9})
+      .bindTooltip(`${s.name}<br>${s.lat.toFixed(2)}°, ${s.lon.toFixed(2)}° · ${s.height} m`)
+      .on("click", ev => { L.DomEvent.stopPropagation(ev); site.value = String(i); setSite(s); })
+      .addTo(map);
+  });
   for (const id of ["lat", "lon"]) $(id).onchange = () => { site.value = "custom"; placeMarker(); };
-  setSite(META.sites[site.value]);
+  setSite(META.sites[+site.value]);
+  if (marker) marker.bringToFront();
+  addTips();
+}
+// ---------- hover explanations ----------
+const TIPS = {
+  site: "Preset observatories grouped by region, from the South Pole to the high Arctic (latitude −90° to +80°) and all longitudes. [a] = coordinates from the astropy observatory registry; others are published site coordinates (~0.01°). Choose 'Custom' or click the map for any other place.",
+  map: "Grey dots: preset observatories (hover for the name, click to select). Click anywhere else to place a custom site. Blue: the current site.",
+  lat: "Latitude in degrees (north positive). It sets which declinations rise high enough (airmass limit) and how long the nights are; near the poles nights can last for weeks or never come.",
+  lon: "Longitude in degrees, east positive (west negative). It sets when local night falls in UTC, i.e. which right ascensions are up while a transient is still bright.",
+  height: "Height above sea level (m). Shown for reference only: it does not enter the calculation (no refraction or horizon dip).",
+  d0: "Start of the window (00:00 UTC). Events whose first Rubin detection falls between Start and End are counted.",
+  d1: "End of the window (inclusive, to 24:00 UTC). Events detected before End are still followed up to 'Max days since 1st det.', even after End.",
+  step: "Time resolution in minutes. Visibility is evaluated on this grid and followable hours are counted in steps of this size. Smaller is more precise and slower; very long windows may use a coarser step automatically (shown in the status line).",
+  sunalt: "A time step counts as night when the Sun is below this altitude: −18° astronomical, −12° nautical, −6° civil twilight.",
+  fold: "Off (default): only the events Rubin detects on these exact simulated dates, under the strategy scheduled then. On: events first detected in the chosen survey years are shifted by whole years into the window (more statistics). This assumes those years are equivalent, which rolling cadences and survey phases break: check the per-year chart.",
+  years: "Survey years to fold: year N runs from 365.25·(N−1) to 365.25·N days after the first simulated detection (hover a year for its dates). Keep years in the same strategy phase.",
+  band: "Rubin filter (u g r i z y) in which the follow-up magnitude limit is applied.",
+  mlim: "Limiting AB magnitude of the follow-up instrument. An event counts only while its noiseless MODEL magnitude in the chosen band is brighter than this (Milky Way and host extinction included; not the noisy Rubin measurement).",
+  xmax: "Maximum airmass (≈ sec z, Pickering 2002): 1.5 ≈ 42° altitude, 2.0 ≈ 30°, 3.0 ≈ 19.5°.",
+  tmin: "Earliest follow-up time after the first Rubin detection, in days (e.g. alert latency or the time needed to trigger). 0 = immediately.",
+  tmax: "Latest useful follow-up time after the first Rubin detection, in days (up to 400). Events are tracked until then, even beyond the window end.",
+  classes: "Transient classes of the ALCeS native-rate simulations (SNANA class rates, OpSim baseline v5.3.1). Hover a class for its model and number of detections.",
+  surveys: "Rubin survey component. The two are simulated separately.",
+  all: "Select all classes", none: "Deselect all classes", yall: "Select all survey years", ynone: "Deselect all survey years",
+  go: "Run the calculation (usually under a second).",
+  theme: "Switch between light and dark display.",
+};
+const CLASS_TIPS = {
+  "SNIa": "Type Ia supernovae (SALT2 model)",
+  "SNIa-91bg": "Subluminous 91bg-like SNe Ia (SED templates)",
+  "SNIax": "Type Iax supernovae (SED templates)",
+  "SNII": "All normal SNe II: SNII-NMF templates with a radioactive tail, 4× the SNII-NMF rate (low-z sweep for z ≤ 0.3)",
+  "SNIIn": "Interacting SNe IIn (MOSFIT)",
+  "SLSN-I": "Hydrogen-poor superluminous supernovae (MOSFIT magnetar)",
+  "TDE": "Tidal disruption events (MOSFIT)",
+  "KN-Bulla19": "Kilonovae, Bulla (2019) models",
+  "KN-K17": "Kilonovae, Kasen et al. (2017) models",
+  "ILOT": "Intermediate-luminosity optical transients (MOSFIT)",
+  "CaRT": "Calcium-rich transients",
+  "PISN-MOSFIT": "Pair-instability supernovae, MOSFIT",
+  "PISN-He": "Pair-instability supernovae, STELLA helium cores",
+  "PISN-H": "Pair-instability supernovae, STELLA hydrogen-rich",
+};
+const SURVEY_TIPS = {
+  WFD: "Wide-Fast-Deep: the main survey (sky with ≥ 100 visits over 10 years, ~18,000 deg²).",
+  DDF: "Deep Drilling Fields (≥ 1000 visits). Simulated separately from WFD: selecting both double-counts events in the DDF fields (≈0.3% of the WFD area).",
+};
+function tip(el, text) {
+  if (!el) return;
+  el.title = text;
+  const lab = el.closest("label");
+  if (lab) { lab.title = text; lab.classList.add("tip"); }
+}
+function addTips() {
+  for (const [id, t] of Object.entries(TIPS)) tip($(id), t);
+  $("classes").querySelectorAll("input").forEach(i => {
+    const n = Object.values(META.entries).filter(e => e.class === i.value).reduce((a, e) => a + e.N_det_10yr, 0);
+    tip(i, `${CLASS_TIPS[i.value] || i.value} · ${fmt(n)} detected by Rubin in 10 yr (WFD + DDF)`);
+  });
+  $("surveys").querySelectorAll("input").forEach(i => tip(i, SURVEY_TIPS[i.value] || i.value));
+  $("years").querySelectorAll("input").forEach(i => {
+    const lo = META.mjd_range[0] + 365.25 * +i.value;
+    tip(i, `Survey year ${+i.value + 1}: first detections from ${isoDate(lo)} to ${isoDate(lo + 365.25)}`);
+  });
+  for (const o of $("band").options) o.title = `Rubin ${o.value} band`;
 }
 function setSite(s) { $("lat").value = (+s.lat).toFixed(4); $("lon").value = (+s.lon).toFixed(4); $("height").value = s.height; placeMarker(); }
 function placeMarker() {
   const ll = [+$("lat").value, +$("lon").value];
   if (marker) marker.setLatLng(ll); else marker = L.circleMarker(ll, {radius: 7, color: "#fff", weight: 2, fillColor: "#2a78d6", fillOpacity: 1}).addTo(map);
-  map.panTo(ll);
+  map.panTo(ll, {animate: false});
+  marker.bringToFront();
 }
 
 // ---------- run ----------

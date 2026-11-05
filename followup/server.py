@@ -16,24 +16,9 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from . import engine
+from .sites import SITES
 
 HERE = Path(__file__).resolve().parent
-SITES = {
-    "Cerro Pachón (Rubin, SOAR, Gemini-S)": (-30.2446, -70.7494, 2700),
-    "Cerro Tololo (CTIO)": (-30.1690, -70.8063, 2207),
-    "La Silla (ESO)": (-29.2567, -70.7300, 2400),
-    "Paranal (VLT)": (-24.6272, -70.4042, 2635),
-    "Las Campanas (Magellan)": (-29.0146, -70.6926, 2380),
-    "SAAO Sutherland (SALT)": (-32.3794, 20.8107, 1798),
-    "Siding Spring (AAT)": (-31.2733, 149.0617, 1164),
-    "Mauna Kea (Keck, Subaru, Gemini-N)": (19.8260, -155.4747, 4160),
-    "Roque de los Muchachos (GTC, NOT, LT)": (28.7606, -17.8816, 2396),
-    "Kitt Peak (KPNO)": (31.9583, -111.5967, 2096),
-    "Palomar (ZTF)": (33.3563, -116.8650, 1712),
-    "Calar Alto": (37.2236, -2.5463, 2168),
-    "Devasthal (India)": (29.3610, 79.6850, 2450),
-    "Xinglong (China)": (40.3958, 117.5775, 960),
-}
 
 app = FastAPI(title="ALCeS follow-up potential")
 STORE = {"path": engine.STORE}
@@ -70,7 +55,7 @@ def meta():
             "bands": cat["bands"], "n_days": cat["n_days"], "mjd_range": [lo, hi],
             "entries": {k: {kk: v[kk] for kk in ("class", "survey", "n_sim", "N_det_10yr", "parts")}
                         for k, v in ent.items()},
-            "sites": {k: {"lat": v[0], "lon": v[1], "height": v[2]} for k, v in SITES.items()}}
+            "sites": [{"region": r, "name": n, "lat": la, "lon": lo, "height": h} for r, n, la, lo, h in SITES]}
 
 
 def engine_order():
