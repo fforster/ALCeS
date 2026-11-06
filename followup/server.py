@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from . import engine
+from . import engine, etc
 from .sites import SITES
 
 HERE = Path(__file__).resolve().parent
@@ -42,6 +42,12 @@ class RunRequest(BaseModel):
     sun_alt: float = Field(-18.0, ge=-30, le=0)
     fold_years: bool = False
     fold_year_list: list[int] | None = None
+    mode: str = "maglim"                       # "maglim" or "etc"
+    instrument: str = "INO"
+    snr_target: float = Field(10.0, gt=0)
+    t_exp_total: float = Field(3600.0, ge=30)  # s
+    seeing: float = Field(1.15, gt=0)          # arcsec
+    binning: int = Field(1, ge=1, le=4)
 
 
 @app.get("/api/meta")
@@ -58,7 +64,9 @@ def meta():
             "entries": {k: {kk: v.get(kk) for kk in ("class", "survey", "n_sim", "N_det_10yr", "z_range")}
                         for k, v in ent.items()},
             "sites": [{"region": r, "name": n, "lat": la, "lon": lo, "height": h} for r, n, la, lo, h in SITES],
-            "galactic_plane": galactic_plane()}
+            "galactic_plane": galactic_plane(),
+            "instruments": {k: {"name": v.name, "bands": v.bands, "t_exp_max": v.t_exp_max, "t_exp_min": v.t_exp_min}
+                            for k, v in etc.INSTRUMENTS.items()}}
 
 
 CLASS_ORDER = ["SNIa", "SNIa-91bg", "SNIax", "SNII", "SNIIn", "SNIbc", "SLSN-I", "TDE", "KN-Bulla19", "KN-K17",

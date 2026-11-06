@@ -173,3 +173,44 @@ def test_window_ends_t_max_after_maximum_light(tmp_path):
         tot = sum(engine.night_detail(q, "P", "WFD", j, 0.0, n + 1.0 - q.lon / 360, store=tmp_path)["followable_hours"]
                   for n in nights)
         assert abs(tot - o["followable_hours"]) <= 0.25 * len(nights)
+
+
+def test_etc_mode_matches_brute_force(tmp_path):
+    """ETC mode: followable while the model mag is brighter than the SNR/exposure-time limit of each (event, time)
+    pair (airmass, Moon, sky); engine, object view and night view against a direct evaluation."""
+    from followup import etc
+    d = _store_peak(tmp_path, n=40, seed=11)
+    engine.catalog.cache_clear(); engine.load.cache_clear()
+    q = engine.Query(classes=["P"], surveys=["WFD"], band="r", airmass_max=2.0, t_min=0.0, t_max=10.0,
+                     mjd_start=61000, mjd_end=61040, step_min=10, lat=33.674, lon=51.3188, height=3600,
+                     mode="etc", snr_target=10.0, t_exp_total=600.0, seeing=1.15, binning=1)
+    r = engine.run(q, tmp_path)
+    inst = etc.INSTRUMENTS["INO"]
+    grid = astro.time_grid(q.mjd_start, q.mjd_end + 10 + q.t_max, q.step_min)
+    dark = astro.night_mask(grid, q.lat, q.lon, q.height, q.sun_alt)
+    lst = astro.local_sidereal_deg(grid, q.lon)
+    moon = etc.moon_state(grid, q.lat, q.lon)
+    hours = np.zeros(len(d["ra"]))
+    for i in range(len(d["ra"])):
+        dt = grid - d["t_fd"][i]
+        m = 17.0 + 0.05 * np.abs(dt - 10.0)
+        x = astro.airmass([d["ra"][i]], [d["dec"][i]], lst, q.lat)[0]
+        sky = etc.sky_mag(inst, d["ra"][i], d["dec"][i], x, *moon)
+        lim = etc.limiting_mag(inst, "r", q.snr_target, q.t_exp_total, x, sky, q.seeing, q.binning)
+        win = (dt >= q.t_min) & (dt <= 10.0 + q.t_max)
+        hours[i] = (win & dark & (x <= q.airmass_max) & (m <= lim)).sum() * q.step_min / 60
+    c = r["classes"][0]
+    fu = hours > 0
+    assert 0 < fu.sum() < len(fu)                       # the limit actually bites for some events
+    assert c["n_sim_followable"] == fu.sum()
+    assert np.isclose(c["N_followable"], d["weight"][fu].sum())
+    sky_tab = r["sky"]["followable"]
+    for i in range(sky_tab["n"]):
+        jj = sky_tab["idx"][i]
+        o = engine.object_detail(q, "P", "WFD", jj, 0.0, store=tmp_path)
+        assert abs(o["followable_hours"] - hours[jj]) <= 1e-6
+    # the faintest possible limit is a true upper bound of every per-pair limit
+    assert r["mag_limit_best"] >= np.nanmax(lim)
+    # magnitude mode is untouched by the new fields
+    q2 = engine.Query(**{**q.__dict__, "mode": "maglim", "mag_lim": 18.0})
+    assert engine.run(q2, tmp_path)["mag_limit_best"] == 18.0

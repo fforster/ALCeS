@@ -25,7 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import astro
+from . import astro, etc
 
 NATIVE_STORE = Path("~/data/alces_followup").expanduser()
 TRAIN_STORE = Path("~/data/alces_followup_train").expanduser()
@@ -57,6 +57,15 @@ class Query:
     # the per-year breakdown returned in "by_year".
     fold_years: bool = False
     fold_year_list: list | None = None
+    # "maglim": followable while model mag <= mag_lim. "etc": followable while the event reaches SNR >= snr_target
+    # within t_exp_total seconds of integration with `instrument` (followup/etc.py), i.e. a limiting magnitude that
+    # follows airmass and the Moon at every time step.
+    mode: str = "maglim"
+    instrument: str = "INO"
+    snr_target: float = 10.0
+    t_exp_total: float = 3600.0      # s
+    seeing: float = 1.15             # arcsec FWHM
+    binning: int = 1
 
 
 @lru_cache(maxsize=None)
@@ -84,6 +93,41 @@ def window_end(d, q, n_days):
     Objects without a time of maximum fall back to t_fd + t_max."""
     dpk = d["t_peak"] - d["t_fd"]
     return np.clip(np.where(np.isfinite(dpk), dpk, 0.0) + q.t_max, None, n_days)
+
+
+def check_mode(q):
+    if q.mode not in ("maglim", "etc"):
+        raise ValueError("mode must be 'maglim' or 'etc'")
+    if q.mode == "etc":
+        if q.instrument not in etc.INSTRUMENTS:
+            raise ValueError(f"unknown instrument {q.instrument!r} (available: {list(etc.INSTRUMENTS)})")
+        inst = etc.INSTRUMENTS[q.instrument]
+        if q.band not in inst.bands:
+            raise ValueError(f"the {q.instrument} ETC has no {q.band} band (available: {', '.join(inst.bands)})")
+        if not (q.snr_target > 0 and q.seeing > 0 and q.binning >= 1):
+            raise ValueError("need snr_target > 0, seeing > 0 and binning >= 1")
+        etc.exposure_plan(inst, q.t_exp_total)            # raises below the shortest exposure
+
+
+def best_limit(q):
+    """Faintest magnitude the follow-up can ever reach: mag_lim, or the ETC limit at airmass 1 under the darkest
+    sky of the model (Moon below the horizon, far away). Used as a cheap pre-cut."""
+    if q.mode != "etc":
+        return q.mag_lim
+    inst = etc.INSTRUMENTS[q.instrument]
+    a, b, c = inst.sky_fit
+    dark_sky = c + a * np.exp(-b * 180.0) - inst.sky_extinction * 1.0
+    return float(etc.limiting_mag(inst, q.band, q.snr_target, q.t_exp_total, 1.0, dark_sky, q.seeing, q.binning))
+
+
+def limit_at(q, ra, dec, airmass, moon):
+    """Limiting magnitude for (event, time) pairs: mag_lim, or the ETC limit for the pair's airmass and sky.
+    moon = (ra, dec, alt, fli) of the Moon at each pair's time (etc.moon_state)."""
+    if q.mode != "etc":
+        return np.full(np.shape(airmass), float(q.mag_lim))
+    inst = etc.INSTRUMENTS[q.instrument]
+    sky = etc.sky_mag(inst, ra, dec, airmass, *moon)
+    return etc.limiting_mag(inst, q.band, q.snr_target, q.t_exp_total, airmass, sky, q.seeing, q.binning)
 
 
 def interp_mag(magb, rows, dt, k0, n_days):
@@ -273,13 +317,28 @@ def object_detail(q: Query, cls: str, survey: str, idx: int, shift: float = 0.0,
     b = bands.index(q.band)
     dt = grid - t_fd
     mag_q = interp_mag(d["mag"][:, b, :], np.full(len(dt), idx), dt, k0_grid, n_days)
-    followable = observable & (dt >= q.t_min) & (dt <= wend) & (mag_q <= q.mag_lim)
+    check_mode(q)
+    lim = np.full(len(grid), np.inf)
+    if observable.any():
+        sel = np.flatnonzero(observable)
+        moon = etc.moon_state(grid[sel], q.lat, q.lon) if q.mode == "etc" else None
+        lim[sel] = limit_at(q, np.full(len(sel), ra), np.full(len(sel), dec), x[sel], moon)
+    followable = observable & (dt >= q.t_min) & (dt <= wend) & (mag_q <= lim)
     out["observable"] = [[a - t_fd, e - t_fd] for a, e in _intervals(grid, observable, step)]
     out["followable"] = [[a - t_fd, e - t_fd] for a, e in _intervals(grid, followable, step)]
     out["followable_hours"] = float(followable.sum() * q.step_min / 60.0)
-    out["query"] = {"band": q.band, "mag_lim": q.mag_lim, "airmass_max": q.airmass_max,
-                    "t_min": q.t_min, "t_max": q.t_max, "sun_alt": q.sun_alt}
+    out["query"] = query_summary(q)
+    out["mag_limit_best"] = best_limit(q)
     return out
+
+
+def query_summary(q):
+    s = {"band": q.band, "mag_lim": q.mag_lim, "airmass_max": q.airmass_max, "t_min": q.t_min, "t_max": q.t_max,
+         "sun_alt": q.sun_alt, "mode": q.mode}
+    if q.mode == "etc":
+        s.update(instrument=q.instrument, instrument_name=etc.INSTRUMENTS[q.instrument].name,
+                 snr_target=q.snr_target, t_exp_total=q.t_exp_total, seeing=q.seeing, binning=q.binning)
+    return s
 
 
 def night_detail(q: Query, cls: str, survey: str, idx: int, shift: float, mjd: float, store: Path = STORE,
@@ -307,16 +366,28 @@ def night_detail(q: Query, cls: str, survey: str, idx: int, shift: float, mjd: f
             for i, bb in enumerate(bands)}
     dark = sun < q.sun_alt
     in_window = (dt >= q.t_min) & (dt <= wend)
-    followable = dark & (x <= q.airmass_max) & in_window & (mags[q.band] <= q.mag_lim)
+    check_mode(q)
+    ra, dec = float(d["ra"][idx]), float(d["dec"][idx])
+    up = alt > 0
+    lim = np.full(len(grid), np.nan)
+    skym = np.full(len(grid), np.nan)
+    if up.any():
+        if q.mode == "etc":
+            moon = etc.moon_state(grid[up], q.lat, q.lon)
+            inst = etc.INSTRUMENTS[q.instrument]
+            skym[up] = etc.sky_mag(inst, ra, dec, x[up], *moon)
+        lim[up] = limit_at(q, np.full(up.sum(), ra), np.full(up.sum(), dec), x[up],
+                           moon if q.mode == "etc" else None)
+    followable = dark & (x <= q.airmass_max) & in_window & (mags[q.band] <= np.where(up, lim, -np.inf))
     step = step_min / 1440.0
     fin = lambda a: [None if not np.isfinite(v) else round(float(v), 3) for v in a]  # noqa: E731
     return {"mjd": np.round(grid, 6).tolist(), "days_since_fd": np.round(dt, 4).tolist(),
-            "sun_alt": np.round(sun, 2).tolist(), "airmass": fin(np.where(alt > 0, x, np.nan)),
+            "sun_alt": np.round(sun, 2).tolist(), "airmass": fin(np.where(up, x, np.nan)),
             "alt": np.round(alt, 2).tolist(), "mag": {bb: fin(m) for bb, m in mags.items()},
+            "mag_limit": fin(lim), "sky_mag": fin(skym),
             "dark": _intervals(grid, dark, step), "followable": _intervals(grid, followable, step),
             "followable_hours": float(followable.sum() * step_min / 60.0), "in_window": bool(in_window.any()),
-            "night_noon_mjd": float(noon), "query": {"band": q.band, "mag_lim": q.mag_lim,
-                                                      "airmass_max": q.airmass_max, "sun_alt": q.sun_alt}}
+            "night_noon_mjd": float(noon), "query": query_summary(q)}
 
 
 def _hist(x, w, bins):
@@ -335,6 +406,8 @@ def run(q: Query, store: Path = STORE):
         raise ValueError(f"need 0 <= t_min < {n_days} d and 0 < t_max <= {n_days} d")
     if q.mjd_end <= q.mjd_start:
         raise ValueError("mjd_end must be after mjd_start")
+    check_mode(q)
+    mlim_best = best_limit(q)
     span = q.mjd_end - q.mjd_start
     # longest follow-up window after first detection among the requested classes (maximum light + t_max)
     lead = 0.0
@@ -358,6 +431,8 @@ def run(q: Query, store: Path = STORE):
     night = astro.night_mask(grid, q.lat, q.lon, q.height, q.sun_alt)
     tn = grid[night]
     lst = astro.local_sidereal_deg(tn, q.lon) if len(tn) else np.zeros(0)
+    # ETC mode: Moon position, altitude and phase at every night step (sky brightness per pair)
+    moon_tn = etc.moon_state(tn, q.lat, q.lon) if (q.mode == "etc" and len(tn)) else None
     night_id = np.floor(tn + q.lon / 360.0 - 0.5).astype(np.int64)     # changes at local noon
     in_win = tn <= q.mjd_end
     phi = np.radians(q.lat)
@@ -402,7 +477,7 @@ def run(q: Query, store: Path = STORE):
             magb = d["mag"][:, b, :]
             # pre-cut: brightest model point from t_fd + t_min to the end of the grid (window ends earlier)
             magmin = np.min(magb[:, k0_grid + int(np.floor(q.t_min)):].astype(np.float32), axis=1)
-            cand &= magmin[src] <= q.mag_lim
+            cand &= magmin[src] <= mlim_best
             idx = np.flatnonzero(cand)
             # every object in range gets a stats row (zeros if never followable)
             hours = np.zeros(len(t_fd))
@@ -427,15 +502,20 @@ def run(q: Query, store: Path = STORE):
                     o = idx[o_loc]
                     dt = tn[j] - t_fd[o]
                     m = interp_mag(magb, src[o], dt, k0_grid, n_days)
-                    ok = m <= q.mag_lim
-                    o, j, dt = o[ok], j[ok], dt[ok]
+                    ok = m <= mlim_best                      # exact in maglim mode, a pre-cut in ETC mode
+                    o, j, dt, m = o[ok], j[ok], dt[ok], m[ok]
                     dec_r = np.radians(dec[o])
                     ha = np.radians(lst[j] - ra[o])
                     sin_alt = np.sin(phi) * np.sin(dec_r) + np.cos(phi) * np.cos(dec_r) * np.cos(ha)
                     alt = np.degrees(np.arcsin(np.clip(sin_alt, -1, 1)))
                     x = 1.0 / np.sin(np.radians(alt + 244.0 / (165.0 + 47.0 * np.abs(alt) ** 1.1)))
                     ok = (alt > 0) & (x <= q.airmass_max)
-                    o, j, dt = o[ok], j[ok], dt[ok]
+                    o, j, dt, m, x = o[ok], j[ok], dt[ok], m[ok], x[ok]
+                    if q.mode == "etc" and len(o):
+                        # SNR >= snr_target within t_exp_total for this pair's airmass and sky (Moon)
+                        lim = limit_at(q, ra[o], dec[o], x, tuple(v[j] for v in moon_tn))
+                        ok = m <= lim
+                        o, j, dt = o[ok], j[ok], dt[ok]
                     if not len(o):
                         continue
                     ts += np.bincount(j, weights=w[o], minlength=len(tn))
@@ -574,7 +654,8 @@ def run(q: Query, store: Path = STORE):
             by_year["chi2"] = float(np.sum(((f[ok] - mean) / e[ok]) ** 2))
             by_year["dof"] = int(ok.sum() - 1)
     return {
-        "query": q.__dict__, "step_min_used": step, "by_year": by_year,
+        "query": q.__dict__, "query_summary": query_summary(q), "mag_limit_best": mlim_best,
+        "step_min_used": step, "by_year": by_year,
         "sky": {k: _sky_table(v) for k, v in sky.items()},
         "airmass_dec_band": [max(-90.0, q.lat - (zmax_deg - 0.5)), min(90.0, q.lat + (zmax_deg - 0.5))],
         "n_nights": n_nights, "dark_hours": dark_hours, "window_days": span,

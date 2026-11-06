@@ -8,6 +8,35 @@ events that are followable, nightly counts, and distributions of how long each e
 light, the brightest noiseless model point in any band. Events first detected after their maximum get a shorter
 window.
 
+**Two counting modes** (2026-11-06):
+- **Limiting magnitude** (`mode="maglim"`): an event counts while its noiseless model magnitude in the chosen band
+  is at most `mag_lim`.
+- **Exposure time** (`mode="etc"`): an event counts while it can reach `snr_target` within `t_exp_total` seconds of
+  integration with the chosen instrument. For example, how many SNe reach SNR > 10 in less than 1 hour at INO.
+  - The limiting magnitude then depends on the airmass and the sky brightness (Moon position and phase) at every
+    time step.
+  - `followup/etc.py` is a vectorized port of the INO SNR calculator by Aysan Hemmatiortakand
+    (`followup/ETC/INO/ETC_2.py`, `ancillary_functions.py`). It uses the same 3.4 m telescope, detector, u/g/r/i
+    bands, extinction, sky model (Moon separation, phase and airmass) and noise model, including the dark-noise and
+    SNR-multiplier tables for single exposures of 30–320 s.
+  - The total time is split into N = ceil(t / 320 s) equal frames, and the SNR adds as √N.
+  - The limit is the exact algebraic inverse of the SNR formula.
+  - Parameters: `instrument` (INO), `snr_target`, `t_exp_total` [s], `seeing` [″] and `binning`.
+  - `tests/test_followup_etc.py` reproduces the original single-exposure SNR to 10⁻¹² and checks the inversion and
+    the Moon ephemeris against astropy.
+  - Kept as in the original, and worth reviewing:
+    - The two original files give different latitudes (35.674° vs 33.674°; INO is at 33.67° N). Here the site is
+      whatever the user selects, and switching to the INO ETC moves it to INO.
+    - The aperture npix = π (2 · seeing / pixel scale · binning)² grows with binning.
+    - The efficiency, 2.3%, is the value given "for i".
+    - The sky fit is calibrated for r only, and is applied to every band as in the original.
+    - There is no z or y band.
+  - Approximations here:
+    - The Moon comes from the Astronomical Almanac low-precision formula (~0.3°, coordinates of date).
+    - The airmass uses Pickering (2002) everywhere; the original mixes two formulas.
+    - Each time step uses the conditions at that moment; the hour-long integration is not followed through the
+      night.
+
 **Data** (user decision, 2026-11-06): the default store is built from the ALCeS **flat-redshift training sets**. These
 have many more bright, nearby events than native-rate sweeps.
 - Each selected (detected) object carries `W_EXPECTED`: the real detected events over 10 years it represents.
@@ -61,7 +90,7 @@ on the map, and every control has a hover explanation.
   (`POST /api/night`: object fields plus `mjd`).
 
 API: `GET /api/meta` (classes, surveys, bands, simulated date span, site presets) and `POST /api/run` with the
-fields of `engine.Query` (`lat, lon, height, classes, surveys, band, mag_lim, airmass_max, t_min, t_max,
+fields of `engine.Query` (`lat, lon, height, classes, surveys, band, mag_lim, airmass_max, t_min, t_max, mode, instrument, snr_target, t_exp_total, seeing, binning,
 mjd_start, mjd_end, step_min, sun_alt, fold_years, fold_year_list`), and `POST /api/object` with the same fields
 plus `cls, survey, idx, shift` (taken from the `sky` table of a run). Python: `followup.engine.run(Query(...))` and
 `followup.engine.object_detail(...)`.

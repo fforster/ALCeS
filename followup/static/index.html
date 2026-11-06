@@ -127,9 +127,27 @@ details summary { cursor: pointer; color: var(--ink); font-weight: 600; }
   </fieldset>
   <fieldset>
     <legend>Follow-up limits</legend>
+    <div class="checks" id="modes" style="grid-template-columns:1fr 1fr;margin-bottom:8px">
+      <label><input type="radio" name="mode" value="maglim" id="mode_maglim" checked>Limiting magnitude</label>
+      <label><input type="radio" name="mode" value="etc" id="mode_etc">Exposure time (ETC)</label>
+    </div>
     <div class="row">
       <label>Band<select id="band"></select></label>
-      <label>Mag limit (model)<input id="mlim" type="number" step="0.1" value="20"></label>
+      <label id="mlimbox">Mag limit (model)<input id="mlim" type="number" step="0.1" value="20"></label>
+    </div>
+    <div id="etcbox" hidden>
+      <div class="row">
+        <label>Instrument<select id="instrument"></select></label>
+        <label>Target SNR<input id="snr" type="number" step="1" min="1" value="10"></label>
+      </div>
+      <div class="row">
+        <label>Max total exposure (min)<input id="texp" type="number" step="any" min="0.5" value="60"></label>
+        <label>Seeing (″ FWHM)<input id="seeing" type="number" step="any" min="0.3" value="1.15"></label>
+      </div>
+      <div class="row">
+        <label>Binning<select id="binning"><option value="1">1×1</option><option value="2">2×2</option></select></label>
+        <span></span>
+      </div>
     </div>
     <div class="row">
       <label>Max airmass<input id="xmax" type="number" step="0.05" min="1" value="2"></label>
@@ -188,6 +206,12 @@ function erfc(x) {  // Numerical Recipes erfc, |error| < 1.2e-7
     t * (0.27886807 + t * (-1.13520398 + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))));
   return x >= 0 ? y : 2 - y;
 }
+// the active follow-up limit in words: "r ≤ 20" or "SNR ≥ 10 in ≤ 60 min (INO 3.4 m, r)"
+function limitText(qs) {
+  if (qs && qs.mode === "etc")
+    return `SNR ≥ ${qs.snr_target} in ≤ ${fmt(qs.t_exp_total / 60, qs.t_exp_total < 600 ? 1 : 0)} min (${qs.instrument}, ${qs.band}, seeing ${qs.seeing}″)`;
+  return `${qs.band} ≤ ${qs.mag_lim}`;
+}
 const relErr = (e, x) => x > 0 ? `${Math.round(100 * e / x)}%` : "–";
 const fmtN = x => x == null ? "–" : (x >= 100 ? fmt(x) : x >= 10 ? fmt(x, 1) : fmt(x, 2));
 let META = null, LAST = null, LASTBODY = null, map = null, marker = null;
@@ -219,6 +243,23 @@ async function init() {
   site.onchange = () => { if (site.value !== "custom") setSite(META.sites[+site.value]); };
   for (const b of META.bands) $("band").add(new Option(b, b));
   $("band").value = "r";
+  // ---- follow-up mode: fixed limiting magnitude, or exposure-time calculator (SNR within a maximum exposure)
+  for (const [k, v] of Object.entries(META.instruments || {})) $("instrument").add(new Option(v.name, k));
+  const applyMode = (moveSite) => {
+    const etcMode = $("mode_etc").checked;
+    $("etcbox").hidden = !etcMode;
+    $("mlimbox").style.visibility = etcMode ? "hidden" : "visible";
+    const inst = (META.instruments || {})[$("instrument").value];
+    for (const o of $("band").options) o.disabled = etcMode && inst && !inst.bands.includes(o.value);
+    if ($("band").selectedOptions[0].disabled) $("band").value = "r";
+    if (etcMode && moveSite) {   // the ETC describes a specific telescope: start from its site
+      const i = META.sites.findIndex(s => /Iranian National/.test(s.name));
+      if (i >= 0 && $("instrument").value === "INO") { $("site").value = String(i); setSite(META.sites[i]); }
+    }
+  };
+  $("mode_etc").onchange = () => applyMode(true);
+  $("mode_maglim").onchange = () => applyMode(false);
+  $("instrument").onchange = () => applyMode(true);
   const cl = $("classes");
   for (const c of META.classes) {
     const n = Object.values(META.entries).filter(e => e.class === c).reduce((a, e) => a + e.N_det_10yr, 0);
@@ -269,6 +310,13 @@ const TIPS = {
   years: "Survey years to fold: year N runs from 365.25·(N−1) to 365.25·N days after the first simulated detection (hover a year for its dates). Keep years in the same strategy phase.",
   band: "Rubin filter (u g r i z y) in which the follow-up magnitude limit is applied.",
   mlim: "Limiting AB magnitude of the follow-up instrument. An event counts only while its noiseless MODEL magnitude in the chosen band is brighter than this (Milky Way and host extinction included; not the noisy Rubin measurement).",
+  mode_maglim: "Count an event while its noiseless model magnitude in the chosen band is brighter than a fixed limit.",
+  mode_etc: "Count an event while it can reach the target SNR within the maximum total exposure with the chosen instrument (exposure-time calculator). The limiting magnitude then changes with airmass and with the Moon (sky brightness) at every moment.",
+  instrument: "Exposure-time calculator: INO 3.4 m telescope (port of the INO SNR calculator by A. Hemmatiortakand; followup/ETC/INO). Selecting it also moves the site to INO; you can change the site afterwards.",
+  snr: "Signal-to-noise ratio the follow-up must reach (source + sky + read + dark noise, as in the INO calculator).",
+  texp: "Maximum total integration time, in minutes. It is split into equal exposures of at most 320 s (the calculator's range is 30-320 s per exposure) and the SNR is added in quadrature (sqrt of the number of frames).",
+  seeing: "Seeing FWHM in arcsec; it sets the photometric aperture (pi x (2 x seeing / pixel scale x binning)^2 pixels, as in the INO calculator). INO presets: 0.7 optimal, 0.9, 1.15 moderate, 1.4, 1.75 very high.",
+  binning: "Detector binning (as in the INO calculator, the aperture pixel count grows with binning).",
   xmax: "Maximum airmass (≈ sec z, Pickering 2002): 1.5 ≈ 42° altitude, 2.0 ≈ 30°, 3.0 ≈ 19.5°.",
   tmin: "Earliest follow-up time after the first Rubin detection, in days (e.g. alert latency or the time needed to trigger). 0 = immediately.",
   tmax: "Follow-up ends this many days after the event's maximum light (the brightest model point in any band). Events first detected after their maximum get a correspondingly shorter window. Events are tracked until then, even beyond the window end.",
@@ -334,6 +382,9 @@ $("form").onsubmit = async ev => {
     classes: [...$("classes").querySelectorAll("input:checked")].map(i => i.value),
     surveys: [...$("surveys").querySelectorAll("input:checked")].map(i => i.value),
     band: $("band").value, mag_lim: +$("mlim").value, airmass_max: +$("xmax").value,
+    mode: $("mode_etc").checked ? "etc" : "maglim", instrument: $("instrument").value || "INO",
+    snr_target: +$("snr").value, t_exp_total: 60 * +$("texp").value, seeing: +$("seeing").value,
+    binning: +$("binning").value,
     t_min: +$("tmin").value, t_max: +$("tmax").value,
     mjd_start: toMJD($("d0").value), mjd_end: toMJD($("d1").value) + 1,
     step_min: +$("step").value, sun_alt: +$("sunalt").value, fold_years: $("fold").checked,
@@ -466,7 +517,7 @@ function renderObject(o) {
   const pk = o.t_peak - o.t_fd, wEnd = o.window[1];
   card.innerHTML = `<h2><span class="sw" style="background:${colorOf(group(o.cls))}"></span>${o.cls} <span style="font-weight:400;color:var(--ink2)">· ${o.survey} · z = ${o.z.toFixed(3)}</span></h2>
     <p class="cap">RA ${o.ra.toFixed(3)}°, Dec ${o.dec.toFixed(3)}° · first Rubin detection ${fromMJD(o.t_fd).toISOString().slice(0, 16).replace("T", " ")} UTC · maximum light ${(pk >= 0 ? "+" : "") + pk.toFixed(1)} d ·
-    <b>${o.followable_hours.toFixed(1)} h followable</b> (${q.band} ≤ ${q.mag_lim}, X ≤ ${q.airmass_max}, from ${q.t_min} d after detection to ${q.t_max} d after maximum = ${wEnd.toFixed(1)} d) ·
+    <b>${o.followable_hours.toFixed(1)} h followable</b> (${limitText(q)}, X ≤ ${q.airmass_max}, from ${q.t_min} d after detection to ${q.t_max} d after maximum = ${wEnd.toFixed(1)} d) ·
     stands for ${o.weight_10yr.toPrecision(3)} real events in 10 yr${yrs ? ` · <b>shifted ${yrs > 0 ? "+" : ""}${yrs} yr</b> from its simulated date (folding; the Rubin points show the cadence of the simulated year)` : ""}<br>
     <span style="color:var(--muted)">${prov}</span>
     <a style="float:right;color:var(--accent);cursor:pointer" id="objclose" title="Close this panel">close</a></p>
@@ -502,7 +553,8 @@ function renderObject(o) {
   }
   // default view: from the brightest model point down to at most 2 mag fainter than the follow-up limit
   // (double-click the plot to autoscale to everything)
-  const lo = Math.min(...allm, q.mag_lim) - 0.7, hi = Math.min(Math.max(...allm, q.mag_lim) + 0.7, q.mag_lim + 2);
+  const lim0 = q.mode === "etc" ? o.mag_limit_best : q.mag_lim;   // ETC: faintest reachable (airmass 1, dark sky)
+  const lo = Math.min(...allm, lim0) - 0.7, hi = Math.min(Math.max(...allm, lim0) + 0.7, lim0 + 2);
   const shade = (iv, color, layer = "below") => iv.map(([a, b]) => ({type: "rect", xref: "x", yref: "paper", x0: a, x1: b, y0: 0, y1: 1,
     fillcolor: color, line: {width: 0}, layer}));
   const vline = (x, dash) => ({type: "line", xref: "x", yref: "paper", x0: x, x1: x, y0: 0, y1: 1, line: {color: css("--ink2"), width: 1, dash}});
@@ -510,9 +562,10 @@ function renderObject(o) {
     vline(0, "solid"), vline(q.t_min, "dash"), vline(pk, "dot"), vline(wEnd, "dash")];
   const xr = [Math.min(-30, pk - 10), Math.max(wEnd, pk) + 30];
   Plotly.newPlot("p_lc", traces, layout({hovermode: "closest", shapes: [...shapes,
-      {type: "line", xref: "paper", yref: "y", x0: 0, x1: 1, y0: q.mag_lim, y1: q.mag_lim, line: {color: css(BAND_COLOR[q.band]), width: 1.2, dash: "dash"}}],
+      {type: "line", xref: "paper", yref: "y", x0: 0, x1: 1, y0: lim0, y1: lim0, line: {color: css(BAND_COLOR[q.band]), width: 1.2, dash: "dash"}}],
     annotations: [{xref: "paper", yref: "y", x: 1, y: q.mag_lim, xanchor: "right", yanchor: "bottom", showarrow: false,
-                   text: `${q.band} limit ${q.mag_lim}`, font: {size: 11, color: css("--ink2")}},
+                   text: q.mode === "etc" ? `${q.band} best-case ETC limit ${lim0.toFixed(1)} (airmass 1, dark sky; see the night view)` : `${q.band} limit ${q.mag_lim}`,
+                   font: {size: 11, color: css("--ink2")}},
                   {xref: "x", yref: "paper", x: pk, y: 1, yanchor: "bottom", showarrow: false, text: "max light",
                    font: {size: 11, color: css("--ink2")}}],
     xaxis: {range: xr, title: {text: "days since first Rubin detection · grey: observable · blue: followable"}}, yaxis: {autorange: false, range: [hi, lo], title: {text: "AB magnitude"}, rangemode: "normal"},
@@ -544,7 +597,7 @@ function renderNight(o, n) {
   const dayStart = Math.round(n.days_since_fd[0]), dayEnd = Math.round(n.days_since_fd[n.days_since_fd.length - 1]);
   box.innerHTML = `<h2 style="margin-top:14px">Night starting ${isoDate(n.night_noon_mjd)} <span style="font-weight:400;color:var(--ink2)">(local; ${dayStart}–${dayEnd} d after first detection)</span>
       <a style="float:right;color:var(--accent);cursor:pointer;font-size:13px;font-weight:400" id="nightclose" title="Close the night view">close</a></h2>
-    <p class="cap">${n.in_window ? "" : "<b>Outside the follow-up window.</b> "}Model magnitude and airmass from sunset to sunrise (UTC). Background: <b>grey</b> = dark (Sun below ${q.sun_alt}°); <b>blue</b> = followable (${q.band} ≤ ${q.mag_lim}, airmass ≤ ${q.airmass_max}, inside the window): <b>${n.followable_hours.toFixed(1)} h</b> this night.</p>
+    <p class="cap">${n.in_window ? "" : "<b>Outside the follow-up window.</b> "}Model magnitude and airmass from sunset to sunrise (UTC). Background: <b>grey</b> = dark (Sun below ${q.sun_alt}°); <b>blue</b> = followable (${limitText(q)}, airmass ≤ ${q.airmass_max}, inside the window)${q.mode === "etc" ? `; dashed: limiting magnitude for the target SNR within the maximum exposure, which follows airmass and the Moon` : ""}: <b>${n.followable_hours.toFixed(1)} h</b> this night.</p>
     <div id="p_nmag" class="plot" style="height:230px"></div><div id="p_nam" class="plot" style="height:190px"></div>`;
   $("nightclose").onclick = () => { box.innerHTML = ""; LASTNIGHT = null; };
   const shade = (iv, color) => iv.map(([a, b]) => ({type: "rect", xref: "x", yref: "paper", x0: utcStr(a), x1: utcStr(b),
@@ -555,9 +608,15 @@ function renderNight(o, n) {
     line: {color: css(BAND_COLOR[b] || "--other"), width: b === q.band ? 2.5 : 1.2},
     hovertemplate: `${b}: %{y:.2f} mag at %{x|%H:%M} UTC<extra></extra>`}));
   const fb = n.mag[q.band].filter(v => v != null);
-  const lo = Math.min(...fb, q.mag_lim) - 0.5, hi = Math.min(Math.max(...fb, q.mag_lim) + 0.5, q.mag_lim + 2);
+  // axis range from the limit where the airmass cut is met (near the horizon it shoots up and would squash the plot)
+  const limv = q.mode === "etc" ? n.mag_limit.filter((v, i) => v != null && n.airmass[i] != null && n.airmass[i] <= q.airmass_max) : [q.mag_lim];
+  if (!limv.length) limv.push(...n.mag_limit.filter(v => v != null));
+  if (q.mode === "etc") mtr.push({x: t, y: n.mag_limit, type: "scatter", mode: "lines", name: `${q.band} limit (ETC)`,
+    line: {color: css(BAND_COLOR[q.band]), width: 1.5, dash: "dash"},
+    hovertemplate: `limit: %{y:.2f} mag at %{x|%H:%M} UTC<extra></extra>`});
+  const lo = Math.min(...fb, ...limv) - 0.5, hi = Math.min(Math.max(...fb, ...limv) + 0.5, Math.max(...limv) + 2);
   Plotly.newPlot("p_nmag", mtr, layout({hovermode: "x unified", margin: {l: 52, r: 12, t: 28, b: 24},
-    shapes: [...shapes, hline(q.mag_lim, css(BAND_COLOR[q.band]))], xaxis: {type: "date"},
+    shapes: q.mode === "etc" ? shapes : [...shapes, hline(q.mag_lim, css(BAND_COLOR[q.band]))], xaxis: {type: "date"},
     yaxis: {autorange: false, range: [hi, lo], rangemode: "normal", title: {text: "model AB mag"}},
     legend: {orientation: "h", y: 1.2, x: 0, font: {size: 11, color: css("--ink2")}}}), CFG);
   const xmax = Math.max(3, q.airmass_max + 0.5);
@@ -579,7 +638,7 @@ function render(r) {
   <div class="tiles">
     <div class="tile"><div class="k">Detected by Rubin in window</div><div class="v">${fmtN(dets)}</div><div class="e">± ${fmtN(err("N_detected_err"))} (${relErr(err("N_detected_err"), dets)}) · ${fmtN(dets / days * 365.25)} / yr</div><div class="e">from <b>${fmt(r.totals.n_sim_detected)}</b> simulated objects</div></div>
     <div class="tile"><div class="k">Followable (≥ 1 step)</div><div class="v">${fmtN(fu)}</div><div class="e">± ${fmtN(err("N_followable_err"))} (${relErr(err("N_followable_err"), fu)}) · ${fmtN(fu / days * 365.25)} / yr</div><div class="e">from <b>${fmt(r.totals.n_sim_followable)}</b> simulated objects</div></div>
-    <div class="tile"><div class="k">Fraction followable</div><div class="v">${dets > 0 ? (100 * fu / dets).toFixed(dets > 0 && fu / dets < 0.01 ? 2 : 1) + "%" : "–"}</div><div class="e">${q.band} ≤ ${q.mag_lim} · X ≤ ${q.airmass_max} · ${q.t_min}–${q.t_max} d</div></div>
+    <div class="tile"><div class="k">Fraction followable</div><div class="v">${dets > 0 ? (100 * fu / dets).toFixed(dets > 0 && fu / dets < 0.01 ? 2 : 1) + "%" : "–"}</div><div class="e">${limitText(r.query_summary)} · X ≤ ${q.airmass_max} · ${q.t_min} d after detection to ${q.t_max} d after max.</div></div>
     <div class="tile"><div class="k">Distinct followable objects per night</div><div class="v">${fmtN(r.per_night_mean)}</div><div class="e">mean over ${r.n_nights} nights</div></div>
   </div>
   <div class="card"><h2>Sky distribution</h2><p class="cap">Mollweide projection in equatorial coordinates (RA increases to the left, 0h at the centre). Coloured: followable events first detected in the window; grey: a sample of detected events that are never followable. One open symbol per class; <b>symbol size grows with the number of real events a simulated object stands for</b> (e.g. each simulated SN Ia stands for hundreds). ALCeS reuses the same random positions and explosion times for every class, so symbols of different classes often coincide. Dashed: declination limits reachable within the airmass limit from the site; dotted: Galactic plane. <b>Click an event</b> to see its light curve, Rubin photometry and visibility windows.${skyNote(r)}</p><div id="p_sky" class="plot" style="height:430px"></div></div>
