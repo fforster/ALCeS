@@ -1,0 +1,687 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rubin Follow-up Potential</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="vendor/plotly.min.js"></script>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10); --accent: #2a78d6;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --other: #898781; --critical: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --accent: #3987e5;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --accent: #3987e5;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; align-items: baseline; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--ring); flex-wrap: wrap; }
+header h1 { font-size: 18px; margin: 0; font-weight: 650; }
+header .sub { color: var(--ink2); font-size: 13px; }
+header button { margin-left: auto; }
+.layout { display: grid; grid-template-columns: 340px 1fr; gap: 0; min-height: calc(100vh - 54px); }
+aside { border-right: 1px solid var(--ring); padding: 14px 16px 40px; overflow-y: auto; max-height: calc(100vh - 54px); position: sticky; top: 0; }
+main { padding: 16px 20px 60px; min-width: 0; }
+fieldset { border: 0; padding: 0; margin: 0 0 16px; }
+legend { font-weight: 650; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink2); margin-bottom: 6px; }
+label { display: block; font-size: 13px; color: var(--ink2); }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+.row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+input, select, button { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--axis); border-radius: 6px; padding: 5px 7px; width: 100%; }
+input[type=checkbox] { width: auto; margin: 0 6px 0 0; }
+button { cursor: pointer; width: auto; padding: 6px 12px; }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; width: 100%; padding: 9px; }
+button:disabled { opacity: .6; cursor: progress; }
+#map { height: 190px; border-radius: 8px; border: 1px solid var(--ring); margin-bottom: 8px; }
+.checks { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; }
+.checks label { display: flex; align-items: center; color: var(--ink); cursor: pointer; }
+label.tip { cursor: help; text-decoration: underline dotted var(--muted); text-underline-offset: 3px; }
+.checks label.tip { cursor: pointer; text-decoration: none; }
+legend[title] { cursor: help; }
+th.tiph { cursor: help; text-decoration: underline dotted var(--muted); text-underline-offset: 3px; }
+.sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; margin-right: 6px; flex: none; }
+.links { font-size: 12px; margin: 4px 0 0; }
+.links a { color: var(--accent); cursor: pointer; margin-right: 10px; }
+.hint { font-size: 12px; color: var(--muted); margin: 4px 0 0; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 12px 14px; }
+.tile .k { font-size: 12px; color: var(--ink2); }
+.tile .v { font-size: 26px; font-weight: 650; margin-top: 2px; }
+.tile .e { font-size: 12px; color: var(--muted); }
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; }
+.card h2 { font-size: 14px; margin: 0 0 2px; font-weight: 650; }
+.card p.cap { margin: 0 0 6px; font-size: 12px; color: var(--ink2); }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+.plot { width: 100%; height: 300px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--ink2); font-weight: 600; }
+.tablewrap { overflow-x: auto; }
+#status { font-size: 13px; color: var(--ink2); margin: 0 0 12px; min-height: 20px; }
+#status.err { color: var(--critical); }
+.empty { color: var(--ink2); padding: 40px 0; text-align: center; }
+details { font-size: 13px; color: var(--ink2); }
+details summary { cursor: pointer; color: var(--ink); font-weight: 600; }
+@media (max-width: 860px) {
+  .layout { grid-template-columns: 1fr; }
+  aside { max-height: none; position: static; border-right: 0; border-bottom: 1px solid var(--ring); }
+  main { padding: 16px; }
+  .grid2 { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Rubin follow-up potential</h1>
+  <span class="sub" id="subtitle">ALCeS simulations · baseline v5.3.1 · expected real events</span>
+  <button id="theme" title="Toggle light/dark">◐ Theme</button>
+</header>
+<div class="layout">
+<aside>
+  <form id="form" autocomplete="off">
+  <fieldset>
+    <legend>Site</legend>
+    <select id="site"></select>
+    <div id="map" style="margin-top:8px"></div>
+    <div class="row3">
+      <label>Lat (°)<input id="lat" type="number" step="0.0001" min="-90" max="90"></label>
+      <label>Lon (°E)<input id="lon" type="number" step="0.0001" min="-180" max="180"></label>
+      <label>Height (m)<input id="height" type="number" step="1"></label>
+    </div>
+    <p class="hint">Click the map to place a custom site.</p>
+  </fieldset>
+  <fieldset>
+    <legend>Time window &amp; resolution</legend>
+    <div class="row">
+      <label>Start (UTC)<input id="d0" type="date"></label>
+      <label>End (UTC)<input id="d1" type="date"></label>
+    </div>
+    <div class="row">
+      <label>Step (min)<input id="step" type="number" min="1" max="240" step="1" value="15"></label>
+      <label>Sun below (°)<input id="sunalt" type="number" min="-30" max="0" step="1" value="-18"></label>
+    </div>
+    <p class="hint" id="span"></p>
+    <div class="checks" style="grid-template-columns:1fr;margin-top:6px"><label title="Off (default): only the events Rubin detects on these exact simulated dates. On: events first detected in the chosen survey years are shifted by whole years into the window (more statistics), which assumes those years are equivalent."><input type="checkbox" id="fold">Fold survey years into the window</label></div>
+    <div id="foldbox" hidden>
+      <p class="hint" style="margin:2px 0 4px">More statistics, but it assumes the chosen years are equivalent: the Rubin strategy changes between years (rolling stripes, survey phases). Choose years in the same phase, then check the per-year chart.</p>
+      <div class="checks" id="years" style="grid-template-columns:repeat(5,1fr)"></div>
+      <p class="links"><a id="yall">all</a><a id="ynone">none</a></p>
+    </div>
+  </fieldset>
+  <fieldset>
+    <legend>Follow-up limits</legend>
+    <div class="row">
+      <label>Band<select id="band"></select></label>
+      <label>Mag limit (model)<input id="mlim" type="number" step="0.1" value="20"></label>
+    </div>
+    <div class="row">
+      <label>Max airmass<input id="xmax" type="number" step="0.05" min="1" value="2"></label>
+      <span></span>
+    </div>
+    <div class="row">
+      <label>Min days since 1st det.<input id="tmin" type="number" step="0.5" min="0" value="0"></label>
+      <label>Max days after max. light<input id="tmax" type="number" step="0.5" min="0.5" value="30"></label>
+    </div>
+  </fieldset>
+  <fieldset>
+    <legend>Classes</legend>
+    <div class="checks" id="classes"></div>
+    <p class="links"><a id="all">all</a><a id="none">none</a></p>
+  </fieldset>
+  <fieldset>
+    <legend>Rubin survey</legend>
+    <div class="checks" id="surveys"></div>
+    <p class="hint">WFD and DDF are simulated separately; adding DDF double-counts events in the DDF fields (≈0.3% of the WFD area).</p>
+  </fieldset>
+  <button class="primary" id="go" type="submit">Compute</button>
+  </form>
+</aside>
+<main>
+  <div id="status"></div>
+  <div id="results"><div class="empty">Choose a site and limits, then press <b>Compute</b>.</div></div>
+</main>
+</div>
+<script>
+// ---------- colors: fixed per class (entity), minor classes fold into "Other" ----------
+const SLOT = {"SNIa": "--s1", "SNII": "--s2", "SLSN-I": "--s3", "TDE": "--s4", "SNIIn": "--s5", "SNIax": "--s6",
+              "SNIa-91bg": "--s7", "SNIbc": "--s8"};
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const group = c => SLOT[c] ? c : "Other";
+const colorOf = g => css(SLOT[g] || "--other");
+const MJD0 = Date.UTC(1858, 10, 17);
+const toMJD = s => (Date.parse(s + "T00:00:00Z") - MJD0) / 86400000;
+const fromMJD = m => new Date(MJD0 + m * 86400000);
+const isoDate = m => fromMJD(m).toISOString().slice(0, 10);
+// Plotly shows Date objects in the browser's time zone; plain "YYYY-MM-DD HH:MM:SS" strings are shown as given (UTC)
+const utcStr = m => fromMJD(m).toISOString().slice(0, 19).replace("T", " ");
+const $ = id => document.getElementById(id);
+const fmt = (x, d = 0) => x == null || !isFinite(x) ? "–" :
+  (Math.abs(x) >= 100 ? Math.round(x).toLocaleString("en-US") : x.toLocaleString("en-US", {maximumFractionDigits: d, minimumFractionDigits: d}));
+function foldVerdict(chi2, dof) {
+  // chi^2 survival probability via Wilson-Hilferty normal approximation
+  const z = (Math.cbrt(chi2 / dof) - (1 - 2 / (9 * dof))) / Math.sqrt(2 / (9 * dof));
+  const p = 0.5 * erfc(z / Math.SQRT2);
+  return p < 0.01 ? `p ≈ ${p.toExponential(0)}: the years differ, folding is biased`
+       : p < 0.1 ? `p ≈ ${p.toFixed(2)}: marginal differences between years`
+       : `p ≈ ${p.toFixed(2)}: consistent within the statistical errors (differences may still hide in the noise)`;
+}
+function erfc(x) {  // Numerical Recipes erfc, |error| < 1.2e-7
+  const t = 1 / (1 + 0.5 * Math.abs(x));
+  const y = t * Math.exp(-x * x - 1.26551223 + t * (1.00002368 + t * (0.37409196 + t * (0.09678418 + t * (-0.18628806 +
+    t * (0.27886807 + t * (-1.13520398 + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))));
+  return x >= 0 ? y : 2 - y;
+}
+const relErr = (e, x) => x > 0 ? `${Math.round(100 * e / x)}%` : "–";
+const fmtN = x => x == null ? "–" : (x >= 100 ? fmt(x) : x >= 10 ? fmt(x, 1) : fmt(x, 2));
+let META = null, LAST = null, LASTBODY = null, map = null, marker = null;
+
+// ---------- theme ----------
+$("theme").onclick = () => {
+  const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark"
+    : matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("fu-theme", document.documentElement.dataset.theme); } catch (e) {}
+  if (LAST) { render(LAST); if (LASTOBJ) { $("objcard").hidden = false; renderObject(LASTOBJ); } }
+};
+try { const t = localStorage.getItem("fu-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+
+// ---------- init ----------
+async function init() {
+  META = await (await fetch("api/meta")).json();
+  $("subtitle").textContent = `ALCeS ${/training/.test(META.source) ? "flat-redshift training sets, efficiency-weighted to native rates"
+    : "native-rate simulations"} · baseline v5.3.1 · expected real events`;
+  const site = $("site");
+  const groups = {};
+  META.sites.forEach((s, i) => {
+    if (!groups[s.region]) { groups[s.region] = document.createElement("optgroup"); groups[s.region].label = s.region; site.append(groups[s.region]); }
+    const o = new Option(s.name, String(i));
+    o.title = `${s.name}: lat ${s.lat.toFixed(3)}°, lon ${s.lon.toFixed(3)}°, ${s.height} m`;
+    groups[s.region].append(o);
+  });
+  site.add(new Option("Custom (map / fields)", "custom"));
+  site.onchange = () => { if (site.value !== "custom") setSite(META.sites[+site.value]); };
+  for (const b of META.bands) $("band").add(new Option(b, b));
+  $("band").value = "r";
+  const cl = $("classes");
+  for (const c of META.classes) {
+    const n = Object.values(META.entries).filter(e => e.class === c).reduce((a, e) => a + e.N_det_10yr, 0);
+    cl.insertAdjacentHTML("beforeend", `<label title="${fmt(n)} detected / 10 yr (all surveys)"><input type="checkbox" value="${c}" ${["SNIa","SNII","SNIbc","SLSN-I","TDE","SNIIn","SNIax"].includes(c) ? "checked" : ""}><span class="sw" style="background:${colorOf(group(c))}"></span>${c}</label>`);
+  }
+  $("all").onclick = () => cl.querySelectorAll("input").forEach(i => i.checked = true);
+  $("none").onclick = () => cl.querySelectorAll("input").forEach(i => i.checked = false);
+  for (const s of META.surveys)
+    $("surveys").insertAdjacentHTML("beforeend", `<label><input type="checkbox" value="${s}" ${s === "WFD" ? "checked" : ""}>${s}</label>`);
+  const [lo, hi] = META.mjd_range;
+  $("span").textContent = `Simulated first detections span ${isoDate(lo)} – ${isoDate(hi)} (MJD ${lo.toFixed(0)}–${hi.toFixed(0)}).`;
+  for (let y = 0; y < 10; y++)
+    $("years").insertAdjacentHTML("beforeend", `<label title="${isoDate(lo + 365.25 * y)} – ${isoDate(lo + 365.25 * (y + 1))}"><input type="checkbox" value="${y}" checked>Y${y + 1}</label>`);
+  $("fold").onchange = () => { $("foldbox").hidden = !$("fold").checked; };
+  $("yall").onclick = () => $("years").querySelectorAll("input").forEach(i => i.checked = true);
+  $("ynone").onclick = () => $("years").querySelectorAll("input").forEach(i => i.checked = false);
+  const y0 = Math.ceil(lo + 365);
+  $("d0").value = isoDate(y0); $("d1").value = isoDate(y0 + 365);
+  map = L.map("map", {worldCopyJump: true}).setView([-30.24, -70.75], 1);
+  map.attributionControl.setPrefix(false);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom: 12,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
+  map.on("click", e => { site.value = "custom"; setSite({lat: e.latlng.lat, lon: ((e.latlng.lng + 540) % 360) - 180, height: 0}); });
+  // every preset observatory as a small dot: hover for its name, click to select it
+  META.sites.forEach((s, i) => {
+    L.circleMarker([s.lat, s.lon], {radius: 4, color: "#ffffff", weight: 1, fillColor: "#52514e", fillOpacity: 0.9})
+      .bindTooltip(`${s.name}<br>${s.lat.toFixed(2)}°, ${s.lon.toFixed(2)}° · ${s.height} m`)
+      .on("click", ev => { L.DomEvent.stopPropagation(ev); site.value = String(i); setSite(s); })
+      .addTo(map);
+  });
+  for (const id of ["lat", "lon"]) $(id).onchange = () => { site.value = "custom"; placeMarker(); };
+  setSite(META.sites[+site.value]);
+  if (marker) marker.bringToFront();
+  addTips();
+}
+// ---------- hover explanations ----------
+const TIPS = {
+  site: "Preset observatories grouped by region, from the South Pole to the high Arctic (latitude −90° to +80°) and all longitudes. [a] = coordinates from the astropy observatory registry; others are published site coordinates (~0.01°). Choose 'Custom' or click the map for any other place.",
+  map: "Grey dots: preset observatories (hover for the name, click to select). Click anywhere else to place a custom site. Blue: the current site.",
+  lat: "Latitude in degrees (north positive). It sets which declinations rise high enough (airmass limit) and how long the nights are; near the poles nights can last for weeks or never come.",
+  lon: "Longitude in degrees, east positive (west negative). It sets when local night falls in UTC, i.e. which right ascensions are up while a transient is still bright.",
+  height: "Height above sea level (m). Shown for reference only: it does not enter the calculation (no refraction or horizon dip).",
+  d0: "Start of the window (00:00 UTC). Events whose first Rubin detection falls between Start and End are counted.",
+  d1: "End of the window (inclusive, to 24:00 UTC). Events detected before End are still followed to the end of their follow-up window, even after End.",
+  step: "Time resolution in minutes. Visibility is evaluated on this grid and followable hours are counted in steps of this size. Smaller is more precise and slower; very long windows may use a coarser step automatically (shown in the status line).",
+  sunalt: "A time step counts as night when the Sun is below this altitude: −18° astronomical, −12° nautical, −6° civil twilight.",
+  fold: "Off (default): only the events Rubin detects on these exact simulated dates, under the strategy scheduled then. On: events first detected in the chosen survey years are shifted by whole years into the window (more statistics). This assumes those years are equivalent, which rolling cadences and survey phases break: check the per-year chart.",
+  years: "Survey years to fold: year N runs from 365.25·(N−1) to 365.25·N days after the first simulated detection (hover a year for its dates). Keep years in the same strategy phase.",
+  band: "Rubin filter (u g r i z y) in which the follow-up magnitude limit is applied.",
+  mlim: "Limiting AB magnitude of the follow-up instrument. An event counts only while its noiseless MODEL magnitude in the chosen band is brighter than this (Milky Way and host extinction included; not the noisy Rubin measurement).",
+  xmax: "Maximum airmass (≈ sec z, Pickering 2002): 1.5 ≈ 42° altitude, 2.0 ≈ 30°, 3.0 ≈ 19.5°.",
+  tmin: "Earliest follow-up time after the first Rubin detection, in days (e.g. alert latency or the time needed to trigger). 0 = immediately.",
+  tmax: "Follow-up ends this many days after the event's maximum light (the brightest model point in any band). Events first detected after their maximum get a correspondingly shorter window. Events are tracked until then, even beyond the window end.",
+  classes: "Transient classes of the ALCeS native-rate simulations (SNANA class rates, OpSim baseline v5.3.1). Hover a class for its model and number of detections.",
+  surveys: "Rubin survey component. The two are simulated separately.",
+  all: "Select all classes", none: "Deselect all classes", yall: "Select all survey years", ynone: "Deselect all survey years",
+  go: "Run the calculation (usually under a second).",
+  theme: "Switch between light and dark display.",
+};
+const CLASS_TIPS = {
+  "SNIa": "Type Ia supernovae (SALT2 model)",
+  "SNIa-91bg": "Subluminous 91bg-like SNe Ia (SED templates)",
+  "SNIax": "Type Iax supernovae (SED templates)",
+  "SNII": "All normal SNe II: SNII-NMF templates, 4× the SNII-NMF rate (SNII-NMF is 25% of normal SNe II)",
+  "SNIbc": "Stripped-envelope SNe Ib/c (MOSFIT)",
+  "SNIIn": "Interacting SNe IIn (MOSFIT)",
+  "SLSN-I": "Hydrogen-poor superluminous supernovae (MOSFIT magnetar)",
+  "TDE": "Tidal disruption events (MOSFIT)",
+  "KN-Bulla19": "Kilonovae, Bulla (2019) models",
+  "KN-K17": "Kilonovae, Kasen et al. (2017) models",
+  "ILOT": "Intermediate-luminosity optical transients (MOSFIT)",
+  "CaRT": "Calcium-rich transients",
+  "PISN-MOSFIT": "Pair-instability supernovae, MOSFIT",
+  "PISN-He": "Pair-instability supernovae, STELLA helium cores",
+  "PISN-H": "Pair-instability supernovae, STELLA hydrogen-rich",
+};
+const SURVEY_TIPS = {
+  WFD: "Wide-Fast-Deep: the main survey (sky with ≥ 100 visits over 10 years, ~18,000 deg²).",
+  DDF: "Deep Drilling Fields (≥ 1000 visits). Simulated separately from WFD: selecting both double-counts events in the DDF fields (≈0.3% of the WFD area).",
+};
+function tip(el, text) {
+  if (!el) return;
+  el.title = text;
+  const lab = el.closest("label");
+  if (lab) { lab.title = text; lab.classList.add("tip"); }
+}
+function addTips() {
+  for (const [id, t] of Object.entries(TIPS)) tip($(id), t);
+  $("classes").querySelectorAll("input").forEach(i => {
+    const n = Object.values(META.entries).filter(e => e.class === i.value).reduce((a, e) => a + e.N_det_10yr, 0);
+    tip(i, `${CLASS_TIPS[i.value] || i.value} · ${fmt(n)} detected by Rubin in 10 yr (WFD + DDF)`);
+  });
+  $("surveys").querySelectorAll("input").forEach(i => tip(i, SURVEY_TIPS[i.value] || i.value));
+  $("years").querySelectorAll("input").forEach(i => {
+    const lo = META.mjd_range[0] + 365.25 * +i.value;
+    tip(i, `Survey year ${+i.value + 1}: first detections from ${isoDate(lo)} to ${isoDate(lo + 365.25)}`);
+  });
+  for (const o of $("band").options) o.title = `Rubin ${o.value} band`;
+}
+function setSite(s) { $("lat").value = (+s.lat).toFixed(4); $("lon").value = (+s.lon).toFixed(4); $("height").value = s.height; placeMarker(); }
+function placeMarker() {
+  const ll = [+$("lat").value, +$("lon").value];
+  if (marker) marker.setLatLng(ll); else marker = L.circleMarker(ll, {radius: 7, color: "#fff", weight: 2, fillColor: "#2a78d6", fillOpacity: 1}).addTo(map);
+  map.panTo(ll, {animate: false});
+  marker.bringToFront();
+}
+
+// ---------- run ----------
+$("form").onsubmit = async ev => {
+  ev.preventDefault();
+  const body = {
+    lat: +$("lat").value, lon: +$("lon").value, height: +$("height").value,
+    classes: [...$("classes").querySelectorAll("input:checked")].map(i => i.value),
+    surveys: [...$("surveys").querySelectorAll("input:checked")].map(i => i.value),
+    band: $("band").value, mag_lim: +$("mlim").value, airmass_max: +$("xmax").value,
+    t_min: +$("tmin").value, t_max: +$("tmax").value,
+    mjd_start: toMJD($("d0").value), mjd_end: toMJD($("d1").value) + 1,
+    step_min: +$("step").value, sun_alt: +$("sunalt").value, fold_years: $("fold").checked,
+    fold_year_list: [...$("years").querySelectorAll("input:checked")].map(i => +i.value),
+  };
+  if (!body.classes.length || !body.surveys.length) return status("Select at least one class and one survey.", true);
+  if (body.fold_years && !body.fold_year_list.length) return status("Select at least one survey year to fold.", true);
+  $("go").disabled = true; status("Computing…");
+  const t0 = performance.now();
+  try {
+    const r = await fetch("api/run", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    const j = await r.json();
+    if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail));
+    LAST = j; LASTBODY = body; LASTOBJ = null; render(j);
+    status(`Done in ${((performance.now() - t0) / 1000).toFixed(1)} s · ${j.n_nights} nights · ${fmt(j.dark_hours)} h with Sun < ${body.sun_alt}° · grid step ${j.step_min_used.toFixed(1)} min`);
+  } catch (e) { status("Error: " + e.message, true); }
+  finally { $("go").disabled = false; }
+};
+function status(msg, err = false) { $("status").textContent = msg; $("status").className = err ? "err" : ""; }
+
+// ---------- rendering ----------
+function layout(extra = {}) {
+  const ink2 = css("--ink2"), grid = css("--grid"), axis = css("--axis");
+  const ax = {gridcolor: grid, linecolor: axis, zerolinecolor: axis, tickfont: {color: ink2, size: 11}, title: {font: {color: ink2, size: 12}}, automargin: true};
+  return Object.assign({
+    paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)", font: {family: "system-ui, sans-serif", color: css("--ink")},
+    margin: {l: 52, r: 12, t: 8, b: 40}, hovermode: "x unified", showlegend: true,
+    legend: {orientation: "h", y: 1.12, x: 0, traceorder: "normal", font: {size: 12, color: ink2}},
+    hoverlabel: {bgcolor: css("--surface"), bordercolor: axis, font: {color: css("--ink")}},
+    xaxis: {...ax}, yaxis: {...ax, rangemode: "tozero"}, bargap: 0.08,
+  }, extra, {xaxis: {...ax, ...(extra.xaxis || {})}, yaxis: {...ax, rangemode: "tozero", ...(extra.yaxis || {})}});
+}
+const CFG = {displaylogo: false, responsive: true, modeBarButtonsToRemove: ["lasso2d", "select2d"]};
+
+function groupsOf(r) {
+  // fold classes into display groups, fixed order: slotted classes then Other
+  const order = [...Object.keys(SLOT), "Other"];
+  const present = [...new Set(r.classes.map(c => group(c.class)))];
+  return order.filter(g => present.includes(g));
+}
+function sumBy(r, g, getter) {
+  let out = null;
+  for (const c of r.classes) if (group(c.class) === g) {
+    const v = getter(c);
+    out = out ? out.map((x, i) => x + v[i]) : v.slice();
+  }
+  return out;
+}
+function binLabels(edges, unit, d = 1) {
+  return edges.slice(0, -1).map((a, i) => `${fmt(a, a < 10 ? d : 0)}–${fmt(edges[i + 1], edges[i + 1] < 10 ? d : 0)} ${unit}`);
+}
+
+// ---------- sky map ----------
+const SYMBOL = {"SNIa": "circle-open", "SNII": "square-open", "SLSN-I": "diamond-open", "TDE": "triangle-up-open",
+                "SNIIn": "triangle-down-open", "SNIax": "pentagon-open", "SNIa-91bg": "hexagon-open", "SNIbc": "star-open",
+                "Other": "x-thin-open"};
+const markerSize = w => Math.min(18, 7 + 2.5 * Math.log10(1 + w));
+const maxW = (f, g) => f.w.reduce((m, w, i) => group(f.cls[i]) === g ? Math.max(m, w) : m, 0);
+const skyLon = ra => -(((ra + 180) % 360 + 360) % 360 - 180);      // RA increasing to the left, 0h at the centre
+function skyNote(r) {
+  const s = r.sky.followable.sampled || {};
+  const capped = Object.entries(s).filter(([, f]) => f < 1).map(([k, f]) => `${k} (${Math.round(100 * f)}%)`);
+  return capped.length ? ` Shown as a random sample: ${capped.join(", ")}.` : "";
+}
+function renderSky(r, G) {
+  const f = r.sky.followable, bg = r.sky.detected, axis = css("--axis"), grid = css("--grid"), muted = css("--muted");
+  const traces = [];
+  if (bg.n) traces.push({type: "scattergeo", mode: "markers", name: "detected, not followable", lon: bg.ra.map(skyLon), lat: bg.dec,
+    marker: {size: 3, color: muted, opacity: 0.45}, hoverinfo: "skip"});
+  const gp = META.galactic_plane, gl = gp.ra.map(skyLon);
+  // break the Galactic-plane line where it wraps around the map edge
+  const gx = [], gy = [];
+  gl.forEach((x, i) => { if (i && Math.abs(x - gl[i - 1]) > 180) { gx.push(null); gy.push(null); } gx.push(x); gy.push(gp.dec[i]); });
+  traces.push({type: "scattergeo", mode: "lines", name: "Galactic plane", lon: gx, lat: gy, line: {color: muted, width: 1.5, dash: "dot"}, hoverinfo: "skip"});
+  for (const d of r.airmass_dec_band) if (d > -89.5 && d < 89.5) {
+    const lon = Array.from({length: 73}, (_, i) => -180 + 5 * i);
+    traces.push({type: "scattergeo", mode: "lines", name: `airmass ≤ ${r.query.airmass_max} limit`, lon, lat: lon.map(() => d),
+      line: {color: css("--ink2"), width: 1.2, dash: "dash"}, hoverinfo: "skip", showlegend: d === r.airmass_dec_band.find(v => v > -89.5 && v < 89.5)});
+  }
+  // open symbols, one per class: ALCeS reuses (RA, Dec, t0) draws across classes, so events of different classes
+  // often sit at exactly the same position; size grows with the real events each simulated object stands for.
+  // Classes with the largest markers are drawn first so smaller ones stay visible on top.
+  const groupsBySize = [...G].sort((a, b) => maxW(f, b) - maxW(f, a));
+  for (const g of groupsBySize) {
+    const ii = [...Array(f.n).keys()].filter(i => group(f.cls[i]) === g);
+    if (!ii.length) continue;
+    traces.push({type: "scattergeo", mode: "markers", name: g, lon: ii.map(i => skyLon(f.ra[i])), lat: ii.map(i => f.dec[i]),
+      legendrank: G.indexOf(g) + 10,
+      marker: {size: ii.map(i => markerSize(f.w[i])), symbol: SYMBOL[g] || "x-thin-open", color: colorOf(g),
+               line: {color: colorOf(g), width: 2}},
+      customdata: ii.map(i => [f.cls[i], f.survey[i], f.idx[i], f.shift[i], f.hours[i], f.w[i], f.ra[i], f.first[i]]),
+      hovertemplate: "<b>%{customdata[0]}</b> (%{customdata[1]})<br>RA %{customdata[6]:.2f}°, Dec %{lat:.2f}°<br>followable %{customdata[4]:.1f} h, first chance %{customdata[7]:.1f} d after detection<br>stands for %{customdata[5]:.2f} real events<br><i>click for details</i><extra></extra>"});
+  }
+  const labels = [0, 3, 6, 9, 15, 18, 21].map(h => ({h, lon: skyLon(15 * h)}));
+  traces.push({type: "scattergeo", mode: "text", lon: labels.map(l => l.lon), lat: labels.map(() => 0), text: labels.map(l => `${l.h}h`),
+    textfont: {color: muted, size: 11}, hoverinfo: "skip", showlegend: false});
+  const lay = layout({hovermode: "closest", margin: {l: 4, r: 4, t: 4, b: 4},
+    geo: {projection: {type: "mollweide"}, showland: false, showcoastlines: false, showcountries: false, showocean: false,
+          showframe: true, framecolor: axis, bgcolor: "rgba(0,0,0,0)",
+          lataxis: {showgrid: true, gridcolor: grid, dtick: 30}, lonaxis: {showgrid: true, gridcolor: grid, dtick: 45}}});
+  Plotly.newPlot("p_sky", traces, lay, CFG);
+  $("p_sky").on("plotly_click", ev => {
+    const p = ev.points.find(pt => pt.customdata);
+    if (p) loadObject(p.customdata);
+  });
+}
+
+// ---------- one event: light curve, Rubin photometry, visibility ----------
+const BAND_COLOR = {u: "--s7", g: "--s3", r: "--s8", i: "--s2", z: "--s5", Y: "--s4"};
+let LASTOBJ = null;
+async function loadObject(cd) {
+  const [cls, survey, idx, shift] = cd;
+  const card = $("objcard");
+  card.hidden = false;
+  card.innerHTML = `<h2>${cls}</h2><p class="cap">Loading light curve…</p>`;
+  card.scrollIntoView({behavior: "smooth", block: "nearest"});
+  try {
+    const r = await fetch("api/object", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({...LASTBODY, cls, survey, idx, shift})});
+    const j = await r.json();
+    if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail));
+    LASTOBJ = j; renderObject(j);
+  } catch (e) { card.innerHTML = `<h2>${cls}</h2><p class="cap" style="color:var(--critical)">Could not load: ${e.message}</p>`; }
+}
+function renderObject(o) {
+  const q = o.query, card = $("objcard");
+  const yrs = Math.round(o.shift_days / 365.25);
+  const prov = o.case ? `training set ${o.case} · chunk ${o.run} · SNID ${o.snid}`
+             : o.run ? `${o.sweep} · run ${o.run} · SNID ${o.snid}` : "store only (rebuild for Rubin photometry)";
+  const pk = o.t_peak - o.t_fd, wEnd = o.window[1];
+  card.innerHTML = `<h2><span class="sw" style="background:${colorOf(group(o.cls))}"></span>${o.cls} <span style="font-weight:400;color:var(--ink2)">· ${o.survey} · z = ${o.z.toFixed(3)}</span></h2>
+    <p class="cap">RA ${o.ra.toFixed(3)}°, Dec ${o.dec.toFixed(3)}° · first Rubin detection ${fromMJD(o.t_fd).toISOString().slice(0, 16).replace("T", " ")} UTC · maximum light ${(pk >= 0 ? "+" : "") + pk.toFixed(1)} d ·
+    <b>${o.followable_hours.toFixed(1)} h followable</b> (${q.band} ≤ ${q.mag_lim}, X ≤ ${q.airmass_max}, from ${q.t_min} d after detection to ${q.t_max} d after maximum = ${wEnd.toFixed(1)} d) ·
+    stands for ${o.weight_10yr.toPrecision(3)} real events in 10 yr${yrs ? ` · <b>shifted ${yrs > 0 ? "+" : ""}${yrs} yr</b> from its simulated date (folding; the Rubin points show the cadence of the simulated year)` : ""}<br>
+    <span style="color:var(--muted)">${prov}</span>
+    <a style="float:right;color:var(--accent);cursor:pointer" id="objclose" title="Close this panel">close</a></p>
+    <p class="cap">Lines: noiseless model per band (thick: the follow-up band). Points: Rubin detections with 1σ errors (click a band in the legend to toggle its curve and points; non-detections are off by default). Vertical lines: first detection (solid), maximum light (dotted) and the follow-up window (dashed: ${q.t_min} d after detection to ${q.t_max} d after maximum); horizontal dashed: the magnitude limit. The view stops 2 mag below the limit; double-click the plot to see everything. Background: <b>grey</b> = observable from the site (night and airmass ≤ ${q.airmass_max}); <b>blue</b> = followable (all limits met). <b>Click any point of the curves to see that night</b> (magnitude and airmass through the night).</p>
+    <div id="p_lc" class="plot" style="height:400px"></div>
+    <div id="nightbox"></div>`;
+  $("objclose").onclick = () => { card.hidden = true; LASTOBJ = null; };
+  const traces = [];
+  const allm = [];
+  let nondetShown = false;
+  for (const b of o.bands) {
+    const c = css(BAND_COLOR[b] || "--other");
+    const m = o.model[b];
+    if (m && m.t.length) {
+      traces.push({x: m.t, y: m.mag, type: "scatter", mode: "lines", name: b, legendgroup: b,
+        line: {color: c, width: b === q.band ? 2.5 : 1.5}, hovertemplate: `${b} model: %{y:.2f} mag at %{x:.1f} d<extra></extra>`});
+      allm.push(...m.mag.filter((v, i) => m.t[i] >= -30 && m.t[i] <= wEnd + 30));
+    }
+    const p = o.phot[b];
+    if (p) {
+      const di = p.t.map((_, i) => i).filter(i => p.det[i] && p.mag[i] != null);
+      if (di.length) traces.push({x: di.map(i => p.t[i]), y: di.map(i => p.mag[i]), type: "scatter", mode: "markers",
+        name: `${b} Rubin det.`, legendgroup: b, showlegend: false, marker: {color: c, size: 7, line: {color: css("--surface"), width: 1}},
+        error_y: {type: "data", array: di.map(i => p.err[i]), color: c, thickness: 1.2, width: 0},
+        hovertemplate: `${b} Rubin detection: %{y:.2f} ± %{error_y.array:.2f} at %{x:.2f} d<extra></extra>`});
+      const ni = p.t.map((_, i) => i).filter(i => !p.det[i] && p.lim5[i] != null);
+      if (ni.length) traces.push({x: ni.map(i => p.t[i]), y: ni.map(i => p.lim5[i]), type: "scatter", mode: "markers",
+        name: "Rubin non-detections (5σ limits)", legendgroup: "nondet", showlegend: !nondetShown, visible: "legendonly", legendrank: 2000,
+        marker: {color: c, size: 6, symbol: "triangle-down-open", opacity: 0.6},
+        hovertemplate: `${b} non-detection, 5σ limit %{y:.2f} at %{x:.2f} d<extra></extra>`});
+      if (ni.length) nondetShown = true;
+    }
+  }
+  // default view: from the brightest model point down to at most 2 mag fainter than the follow-up limit
+  // (double-click the plot to autoscale to everything)
+  const lo = Math.min(...allm, q.mag_lim) - 0.7, hi = Math.min(Math.max(...allm, q.mag_lim) + 0.7, q.mag_lim + 2);
+  const shade = (iv, color, layer = "below") => iv.map(([a, b]) => ({type: "rect", xref: "x", yref: "paper", x0: a, x1: b, y0: 0, y1: 1,
+    fillcolor: color, line: {width: 0}, layer}));
+  const vline = (x, dash) => ({type: "line", xref: "x", yref: "paper", x0: x, x1: x, y0: 0, y1: 1, line: {color: css("--ink2"), width: 1, dash}});
+  const shapes = [...shade(o.observable, css("--grid")), ...shade(o.followable, css("--accent") + "40"),
+    vline(0, "solid"), vline(q.t_min, "dash"), vline(pk, "dot"), vline(wEnd, "dash")];
+  const xr = [Math.min(-30, pk - 10), Math.max(wEnd, pk) + 30];
+  Plotly.newPlot("p_lc", traces, layout({hovermode: "closest", shapes: [...shapes,
+      {type: "line", xref: "paper", yref: "y", x0: 0, x1: 1, y0: q.mag_lim, y1: q.mag_lim, line: {color: css(BAND_COLOR[q.band]), width: 1.2, dash: "dash"}}],
+    annotations: [{xref: "paper", yref: "y", x: 1, y: q.mag_lim, xanchor: "right", yanchor: "bottom", showarrow: false,
+                   text: `${q.band} limit ${q.mag_lim}`, font: {size: 11, color: css("--ink2")}},
+                  {xref: "x", yref: "paper", x: pk, y: 1, yanchor: "bottom", showarrow: false, text: "max light",
+                   font: {size: 11, color: css("--ink2")}}],
+    xaxis: {range: xr, title: {text: "days since first Rubin detection · grey: observable · blue: followable"}}, yaxis: {autorange: false, range: [hi, lo], title: {text: "AB magnitude"}, rangemode: "normal"},
+    legend: {orientation: "h", y: 1.18, x: 0, font: {size: 11, color: css("--ink2")}}}), CFG);
+  // click a point of the light curve -> that night in detail
+  $("p_lc").on("plotly_click", ev => { const p = ev.points && ev.points[0]; if (p) loadNight(o, o.t_fd + p.x); });
+  if (LASTNIGHT && LASTNIGHT.key === objKey(o)) renderNight(o, LASTNIGHT.data);
+}
+
+// ---------- one event during one night: magnitude and airmass ----------
+let LASTNIGHT = null;
+const objKey = o => `${o.cls}|${o.survey}|${o.idx}|${o.shift_days}`;
+async function loadNight(o, mjd) {
+  const box = $("nightbox");
+  box.innerHTML = `<p class="cap">Loading the night of ${isoDate(mjd)}…</p>`;
+  try {
+    const r = await fetch("api/night", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({...LASTBODY, cls: o.cls, survey: o.survey, idx: o.idx, shift: o.shift_days, mjd})});
+    const j = await r.json();
+    if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail));
+    LASTNIGHT = {key: objKey(o), data: j};
+    renderNight(o, j);
+    box.scrollIntoView({behavior: "smooth", block: "nearest"});
+  } catch (e) { box.innerHTML = `<p class="cap" style="color:var(--critical)">Could not load the night: ${e.message}</p>`; }
+}
+function renderNight(o, n) {
+  const q = n.query, box = $("nightbox");
+  const t = n.mjd.map(utcStr);
+  const dayStart = Math.round(n.days_since_fd[0]), dayEnd = Math.round(n.days_since_fd[n.days_since_fd.length - 1]);
+  box.innerHTML = `<h2 style="margin-top:14px">Night starting ${isoDate(n.night_noon_mjd)} <span style="font-weight:400;color:var(--ink2)">(local; ${dayStart}–${dayEnd} d after first detection)</span>
+      <a style="float:right;color:var(--accent);cursor:pointer;font-size:13px;font-weight:400" id="nightclose" title="Close the night view">close</a></h2>
+    <p class="cap">${n.in_window ? "" : "<b>Outside the follow-up window.</b> "}Model magnitude and airmass from sunset to sunrise (UTC). Background: <b>grey</b> = dark (Sun below ${q.sun_alt}°); <b>blue</b> = followable (${q.band} ≤ ${q.mag_lim}, airmass ≤ ${q.airmass_max}, inside the window): <b>${n.followable_hours.toFixed(1)} h</b> this night.</p>
+    <div id="p_nmag" class="plot" style="height:230px"></div><div id="p_nam" class="plot" style="height:190px"></div>`;
+  $("nightclose").onclick = () => { box.innerHTML = ""; LASTNIGHT = null; };
+  const shade = (iv, color) => iv.map(([a, b]) => ({type: "rect", xref: "x", yref: "paper", x0: utcStr(a), x1: utcStr(b),
+    y0: 0, y1: 1, fillcolor: color, line: {width: 0}, layer: "below"}));
+  const shapes = [...shade(n.dark, css("--grid")), ...shade(n.followable, css("--accent") + "40")];
+  const hline = (y, color) => ({type: "line", xref: "paper", yref: "y", x0: 0, x1: 1, y0: y, y1: y, line: {color, width: 1.2, dash: "dash"}});
+  const mtr = o.bands.filter(b => n.mag[b].some(v => v != null)).map(b => ({x: t, y: n.mag[b], type: "scatter", mode: "lines", name: b,
+    line: {color: css(BAND_COLOR[b] || "--other"), width: b === q.band ? 2.5 : 1.2},
+    hovertemplate: `${b}: %{y:.2f} mag at %{x|%H:%M} UTC<extra></extra>`}));
+  const fb = n.mag[q.band].filter(v => v != null);
+  const lo = Math.min(...fb, q.mag_lim) - 0.5, hi = Math.min(Math.max(...fb, q.mag_lim) + 0.5, q.mag_lim + 2);
+  Plotly.newPlot("p_nmag", mtr, layout({hovermode: "x unified", margin: {l: 52, r: 12, t: 28, b: 24},
+    shapes: [...shapes, hline(q.mag_lim, css(BAND_COLOR[q.band]))], xaxis: {type: "date"},
+    yaxis: {autorange: false, range: [hi, lo], rangemode: "normal", title: {text: "model AB mag"}},
+    legend: {orientation: "h", y: 1.2, x: 0, font: {size: 11, color: css("--ink2")}}}), CFG);
+  const xmax = Math.max(3, q.airmass_max + 0.5);
+  Plotly.newPlot("p_nam", [{x: t, y: n.airmass, type: "scatter", mode: "lines", name: "airmass", line: {color: css("--ink"), width: 2},
+      hovertemplate: "airmass %{y:.2f} at %{x|%H:%M} UTC<extra></extra>"}],
+    layout({showlegend: false, hovermode: "x unified", margin: {l: 52, r: 12, t: 8, b: 40},
+      shapes: [...shapes, hline(q.airmass_max, css("--ink2"))], xaxis: {type: "date", title: {text: "UTC"}},
+      yaxis: {autorange: false, range: [xmax, 1], rangemode: "normal", title: {text: "airmass"}}}), CFG);
+}
+
+function render(r) {
+  const q = r.query, G = groupsOf(r);
+  const dets = r.totals.N_detected, fu = r.totals.N_followable;
+  // combined errors from the engine: events of different classes that share a simulated draw are correlated
+  const err = k => r.totals[k];
+  const medH = r.classes.length === 1 ? r.classes[0].median_hours : null;
+  const days = r.window_days;
+  $("results").innerHTML = `
+  <div class="tiles">
+    <div class="tile"><div class="k">Detected by Rubin in window</div><div class="v">${fmtN(dets)}</div><div class="e">± ${fmtN(err("N_detected_err"))} (${relErr(err("N_detected_err"), dets)}) · ${fmtN(dets / days * 365.25)} / yr</div><div class="e">from <b>${fmt(r.totals.n_sim_detected)}</b> simulated objects</div></div>
+    <div class="tile"><div class="k">Followable (≥ 1 step)</div><div class="v">${fmtN(fu)}</div><div class="e">± ${fmtN(err("N_followable_err"))} (${relErr(err("N_followable_err"), fu)}) · ${fmtN(fu / days * 365.25)} / yr</div><div class="e">from <b>${fmt(r.totals.n_sim_followable)}</b> simulated objects</div></div>
+    <div class="tile"><div class="k">Fraction followable</div><div class="v">${dets > 0 ? (100 * fu / dets).toFixed(dets > 0 && fu / dets < 0.01 ? 2 : 1) + "%" : "–"}</div><div class="e">${q.band} ≤ ${q.mag_lim} · X ≤ ${q.airmass_max} · ${q.t_min}–${q.t_max} d</div></div>
+    <div class="tile"><div class="k">Distinct followable objects per night</div><div class="v">${fmtN(r.per_night_mean)}</div><div class="e">mean over ${r.n_nights} nights</div></div>
+  </div>
+  <div class="card"><h2>Sky distribution</h2><p class="cap">Mollweide projection in equatorial coordinates (RA increases to the left, 0h at the centre). Coloured: followable events first detected in the window; grey: a sample of detected events that are never followable. One open symbol per class; <b>symbol size grows with the number of real events a simulated object stands for</b> (e.g. each simulated SN Ia stands for hundreds). ALCeS reuses the same random positions and explosion times for every class, so symbols of different classes often coincide. Dashed: declination limits reachable within the airmass limit from the site; dotted: Galactic plane. <b>Click an event</b> to see its light curve, Rubin photometry and visibility windows.${skyNote(r)}</p><div id="p_sky" class="plot" style="height:430px"></div></div>
+  <div class="card" id="objcard" hidden></div>
+  ${r.by_year ? `<div class="card"><h2>Folding check: the window estimated from each survey year alone</h2><p class="cap">Expected followable events in this window if every year were like survey year N (error bars ±1σ); the line is the folded result. ${r.by_year.chi2 != null ? `Scatter χ²/dof = <b>${r.by_year.chi2.toFixed(1)} / ${r.by_year.dof}</b> (${foldVerdict(r.by_year.chi2, r.by_year.dof)}).` : ""} Years that differ beyond their errors are not equivalent for these cuts: drop them or keep folding off.</p><div id="p_year" class="plot" style="height:240px"></div></div>` : ""}
+  <div class="card"><h2>Followable objects per night</h2><p class="cap">Expected number of distinct objects that meet all limits at least once during each night, stacked by class.</p><div id="p_night" class="plot"></div></div>
+  <div class="card"><h2>Objects followable at each moment</h2><p class="cap">Expected number meeting all limits at each dark time step (all selected classes).</p><div id="p_inst" class="plot" style="height:240px"></div></div>
+  <div class="grid2">
+    <div class="card"><h2>How long each object can be followed</h2><p class="cap">Total dark hours meeting all limits within ${q.t_min}–${q.t_max} d of first detection (followable objects first detected in the window).</p><div id="p_hours" class="plot"></div></div>
+    <div class="card"><h2>Nights with a follow-up opportunity</h2><p class="cap">Number of distinct nights per followable object.</p><div id="p_nights" class="plot"></div></div>
+    <div class="card"><h2>Delay to the first opportunity</h2><p class="cap">Days from the first Rubin detection to the first time the object meets all limits.</p><div id="p_delay" class="plot"></div></div>
+    <div class="card" style="grid-column:1/-1"><h2>Per class</h2><p class="cap">Expected real events (± Poisson-like error from the simulation weights) and the number of distinct simulated objects behind them: with N simulated objects the relative error is roughly 1/√N. Medians over followable objects. Histogram tooltips also give the simulated objects per bin.</p>
+      <div class="tablewrap"><table id="tbl"></table></div>
+      <p class="links" style="margin-top:8px"><a id="dl_csv">Download table (CSV)</a><a id="dl_json">Download full result (JSON)</a></p>
+    </div>
+  </div>
+  <details class="card"><summary>Method and caveats</summary>
+    <ul>
+      <li>Events come from the ALCeS <b>flat-redshift training sets</b> (detected objects flat in log z; OpSim baseline v5.3.1, WFD ≥ 100 / DDF ≥ 1000 visits). Each object carries W_EXPECTED, the real detected events over 10 yr it represents: per redshift bin these weights add up to the native SNANA rate × the <b>detection efficiency measured in the simulations</b>, and within a bin they correct the generation density and the visit coverage. Sums of weights are therefore expected real counts, while the flat redshift sampling gives many more bright, nearby events than a native-rate simulation would.</li>
+      <li><b>Follow-up window:</b> from “min days” after the first Rubin detection to “max days” after maximum light, the brightest noiseless model point in any band. Events detected after their maximum get a shorter window.</li>
+      <li>Only objects Rubin detects (first epoch with a detection flag) count. Their brightness is the <b>noiseless model</b> magnitude (MW + host extinction included), not the measured one.</li>
+      <li>Night: Sun below the chosen altitude. Airmass: Pickering (2002). The Moon and weather are ignored. Target coordinates are J2000 (≤ 0.3° precession).</li>
+      <li><b>Dates</b> (default): only events Rubin detects on the selected simulated dates, i.e. the strategy actually scheduled then (rolling stripes, survey phases). Honest but noisy at bright limits.</li>
+      <li><b>Fold survey years</b> (optional): events first detected in the chosen survey years are also shifted by whole years into the window (365.25 d keeps the RA, light curve and Sun–object geometry; weights divided by the number of years). This is <b>not</b> neutral: the Rubin strategy changes between years, so the detected rate differs by up to ~2× between years for some classes. The per-year chart and its χ² show whether the chosen years agree for the current cuts. Errors count the copies of one simulated object as fully correlated.</li>
+      <li>Templates: the simulations detect transients by signal-to-noise from the first night; the lack of difference-imaging templates early in the survey is not modelled (in either mode).</li>
+      <li>SNII: all normal SNe II, 4 × the SNII-NMF rate (z ≤ 0.3 from the low-z sweep, z &gt; 0.3 from the full sweep). Errors grow when few simulated objects pass the cuts (see “sim” column).</li>
+    </ul>
+  </details>`;
+
+  renderSky(r, G);
+
+  if (r.by_year) {
+    const by = r.by_year, yl = by.years.map(y => `Y${y + 1}`);
+    Plotly.newPlot("p_year", [
+      {x: yl, y: by.followable, type: "scatter", mode: "markers", name: "single year",
+       marker: {size: 9, color: css("--accent")}, customdata: by.n_sim_followable,
+       error_y: {type: "data", array: by.followable_err, color: css("--accent"), thickness: 1.5, width: 4},
+       hovertemplate: "%{x}: %{y:,.0f} ± %{error_y.array:,.0f} (%{customdata} sim.)<extra></extra>"},
+      {x: yl, y: yl.map(() => fu), type: "scatter", mode: "lines", name: "folded",
+       line: {color: css("--ink2"), width: 1.5, dash: "dash"}, hovertemplate: "folded: %{y:,.0f}<extra></extra>"}],
+      layout({hovermode: "closest", xaxis: {type: "category", title: {text: "survey year used"}},
+              yaxis: {title: {text: "followable in window"}}}), CFG);
+  }
+
+  // nightly stacked area
+  const nx = r.nightly.night_mjd.map(utcStr);
+  Plotly.newPlot("p_night", G.map(g => ({
+    x: nx, y: sumBy(r, g, c => r.nightly.by_class[c.class] || nx.map(() => 0)), name: g, type: "scatter", mode: "lines",
+    stackgroup: "one", line: {width: 1.5, color: colorOf(g)}, fillcolor: colorOf(g) + "99",
+    hovertemplate: "%{y:.2f}<extra>" + g + "</extra>"})),
+    layout({yaxis: {title: {text: "objects per night"}}, xaxis: {type: "date"}}), CFG);
+
+  // instantaneous
+  const tx = r.timeseries.mjd.map(utcStr);
+  Plotly.newPlot("p_inst", [{x: tx, y: r.timeseries.total, type: "scattergl", mode: "markers", name: "all selected",
+    marker: {size: 3, color: css("--accent")}, hovertemplate: "%{x|%Y-%m-%d %H:%M} UTC<br>%{y:.2f} objects<extra></extra>"}],
+    layout({showlegend: false, hovermode: "closest", yaxis: {title: {text: "objects now"}}, xaxis: {type: "date"}}), CFG);
+
+  const hist = (div, key, edges, unit, xt, d) => {
+    const labels = binLabels(edges, unit, d);
+    Plotly.newPlot(div, G.map(g => ({
+      x: labels, y: sumBy(r, g, c => c[key]), name: g, type: "bar", customdata: sumBy(r, g, c => c[key + "_nsim"]),
+      marker: {color: colorOf(g), line: {color: css("--surface"), width: 1}},
+      hovertemplate: "%{y:.2f} (%{customdata} sim.)<extra>" + g + "</extra>"})),
+      layout({barmode: "stack", hovermode: "x unified", xaxis: {title: {text: xt}, type: "category", tickangle: -45},
+              yaxis: {title: {text: "expected objects"}}}), CFG);
+  };
+  hist("p_hours", "hist_hours", r.bins.hours, "h", "followable hours", 1);
+  const nb = r.bins.nights.map(x => x + 0.5);
+  const nl = nb.slice(0, -1).map(x => String(x));
+  Plotly.newPlot("p_nights", G.map(g => ({x: nl, y: sumBy(r, g, c => c.hist_nights), name: g, type: "bar",
+    customdata: sumBy(r, g, c => c.hist_nights_nsim),
+    marker: {color: colorOf(g), line: {color: css("--surface"), width: 1}}, hovertemplate: "%{y:.2f} (%{customdata} sim.)<extra>" + g + "</extra>"})),
+    layout({barmode: "stack", xaxis: {title: {text: "nights"}, type: "category"}, yaxis: {title: {text: "expected objects"}}}), CFG);
+  hist("p_delay", "hist_delay", r.bins.delay, "d", "days after first detection", 1);
+
+  // table
+  const rows = r.classes.map(c => [c.class, c.N_detected, c.N_detected_err, c.N_followable, c.N_followable_err,
+    c.frac_followable, c.median_hours, c.median_nights, c.median_delay_days, c.n_sim_followable, c.n_sim_detected]);
+  const COLS = [
+    ["Class", "Transient class (ALCeS native-rate simulation). Hover a class in the sidebar for its model."],
+    ["Detected", "Expected number of real events whose first Rubin detection falls in the window (selected surveys), ± the Poisson-like error from the simulation weights."],
+    ["Followable", "Expected number of those events that meet every follow-up limit (night, model magnitude, airmass, days since first detection) during at least one time step, ± error."],
+    ["± rel.", "Relative error of the followable number (error / value). Roughly 1/√(Sim. followable)."],
+    ["Sim. followable", "Distinct simulated objects behind the followable number (folded copies of one object count once). ⚠ marks fewer than 20: the number and its distributions are noisy."],
+    ["Sim. detected", "Distinct simulated objects behind the detected number."],
+    ["% followable", "Followable / detected, in percent."],
+    ["Med. h", "Median total dark hours during which a followable event meets all limits, within the min–max days since first detection (weighted by expected numbers)."],
+    ["Med. nights", "Median number of distinct nights on which a followable event meets all limits at least once."],
+    ["Med. delay d", "Median days from the first Rubin detection to the first time the event meets all limits."],
+  ];
+  $("tbl").innerHTML = `<thead><tr>${COLS.map(([h, t]) => `<th title="${t}" class="tiph">${h}</th>`).join("")}</tr></thead><tbody>` +
+    rows.map(x => `<tr><td><span class="sw" style="background:${colorOf(group(x[0]))}"></span>${x[0]}</td><td>${fmtN(x[1])} ± ${fmtN(x[2])}</td><td>${fmtN(x[3])} ± ${fmtN(x[4])}</td><td>${relErr(x[4], x[3])}</td><td><b>${x[9] > 0 && x[9] < 20 ? "⚠ " : ""}${fmt(x[9])}</b></td><td>${fmt(x[10])}</td><td>${x[5] == null ? "–" : (100 * x[5]).toFixed(1)}</td><td>${fmt(x[6], 1)}</td><td>${fmt(x[7], 0)}</td><td>${fmt(x[8], 1)}</td></tr>`).join("") + "</tbody>";
+  if (rows.some(x => x[9] > 0 && x[9] < 20))
+    $("tbl").insertAdjacentHTML("afterend", `<p class="hint">⚠ fewer than 20 simulated objects pass the cuts: the number is uncertain (see ±) and its distributions are noisy. Native sweeps sample the whole volume, so bright (nearby) events are rare in them.</p>`);
+  const save = (name, text, type) => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], {type})); a.download = name; a.click(); };
+  $("dl_csv").onclick = () => save("followup_classes.csv",
+    "class,N_detected,N_detected_err,N_followable,N_followable_err,frac_followable,median_hours,median_nights,median_delay_days,n_sim_followable,n_sim_detected\n" +
+    rows.map(x => x.join(",")).join("\n"), "text/csv");
+  $("dl_json").onclick = () => save("followup_result.json", JSON.stringify(r), "application/json");
+}
+init().catch(e => status("Could not load metadata: " + e.message, true));
+</script>
+</body>
+</html>
