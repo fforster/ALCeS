@@ -111,12 +111,14 @@ def check_mode(q):
 
 def best_limit(q):
     """Faintest magnitude the follow-up can ever reach: mag_lim, or the ETC limit at airmass 1 under the darkest
-    sky of the model (Moon below the horizon, far away). Used as a cheap pre-cut."""
+    sky the model can produce. Used as a pre-cut, so it must be a true upper bound. In the INO sky model the darkest
+    sky is NOT "Moon below the horizon" but a thin Moon above it: the phase term -2.5 log10(FLI), with FLI floored at
+    1e-3, adds up to +7.5 mag (fixed 2026-11-06; the earlier bound could drop events in thin-Moon nights)."""
     if q.mode != "etc":
         return q.mag_lim
     inst = etc.INSTRUMENTS[q.instrument]
     a, b, c = inst.sky_fit
-    dark_sky = c + a * np.exp(-b * 180.0) - inst.sky_extinction * 1.0
+    dark_sky = c + a * np.exp(-b * 180.0) - inst.sky_extinction * 1.0 - 2.5 * np.log10(1e-3)
     return float(etc.limiting_mag(inst, q.band, q.snr_target, q.t_exp_total, 1.0, dark_sky, q.seeing, q.binning))
 
 
@@ -324,12 +326,43 @@ def object_detail(q: Query, cls: str, survey: str, idx: int, shift: float = 0.0,
         moon = etc.moon_state(grid[sel], q.lat, q.lon) if q.mode == "etc" else None
         lim[sel] = limit_at(q, np.full(len(sel), ra), np.full(len(sel), dec), x[sel], moon)
     followable = observable & (dt >= q.t_min) & (dt <= wend) & (mag_q <= lim)
+    # limiting magnitude at the event's position per night: the deepest value while observable (dark, airmass cut)
+    lim_t, lim_m = [], []
+    if observable.any():
+        sel = np.flatnonzero(observable)
+        nid = np.floor(grid[sel] + q.lon / 360.0 - 0.5)
+        for nn in np.unique(nid):
+            ii = sel[nid == nn]
+            k = ii[np.argmax(lim[ii])]
+            lim_t.append(round(float(grid[k] - t_fd), 4))
+            lim_m.append(round(float(lim[k]), 3))
+    out["limit_nightly"] = {"t": lim_t, "mag": lim_m}
     out["observable"] = [[a - t_fd, e - t_fd] for a, e in _intervals(grid, observable, step)]
     out["followable"] = [[a - t_fd, e - t_fd] for a, e in _intervals(grid, followable, step)]
     out["followable_hours"] = float(followable.sum() * q.step_min / 60.0)
     out["query"] = query_summary(q)
     out["mag_limit_best"] = best_limit(q)
+    # Moon phase at local midnight of every night of the light-curve span (illuminated fraction, Moon altitude)
+    n0 = np.floor(t0 + q.lon / 360.0 - 0.5)
+    midn = np.arange(n0, np.floor(t1 + q.lon / 360.0 - 0.5) + 1) + 1.0 - q.lon / 360.0
+    mra, _, malt, fli = etc.moon_state(midn, q.lat, q.lon)
+    sra, _ = astro.sun_radec(midn)
+    out["moon"] = {"t": np.round(midn - t_fd, 3).tolist(), "fli": np.round(fli, 3).tolist(),
+                   "alt": np.round(malt, 1).tolist(),
+                   # elongation east of the Sun (RA difference): 0 new, 90 first quarter, 180 full, 270 last quarter
+                   "elong": np.round((mra - sra) % 360.0, 1).tolist()}
     return out
+
+
+def _moon_night(grid, q, ra, dec):
+    """Moon through one night: airmass (None below the horizon), altitude, illuminated fraction, distance to the
+    event [deg]."""
+    mra, mdec, malt, fli = etc.moon_state(grid, q.lat, q.lon)
+    mx = astro.airmass_from_alt(malt)
+    fin = lambda a: [None if not np.isfinite(v) else round(float(v), 3) for v in a]  # noqa: E731
+    sep = etc.separation_deg(ra, dec, mra, mdec)
+    return {"airmass": fin(np.where(malt > 0, mx, np.nan)), "alt": np.round(malt, 2).tolist(),
+            "fli": float(np.round(np.mean(fli), 3)), "sep_deg": float(np.round(np.mean(sep), 1))}
 
 
 def query_summary(q):
@@ -385,6 +418,7 @@ def night_detail(q: Query, cls: str, survey: str, idx: int, shift: float, mjd: f
             "sun_alt": np.round(sun, 2).tolist(), "airmass": fin(np.where(up, x, np.nan)),
             "alt": np.round(alt, 2).tolist(), "mag": {bb: fin(m) for bb, m in mags.items()},
             "mag_limit": fin(lim), "sky_mag": fin(skym),
+            "moon": _moon_night(grid, q, float(d["ra"][idx]), float(d["dec"][idx])),
             "dark": _intervals(grid, dark, step), "followable": _intervals(grid, followable, step),
             "followable_hours": float(followable.sum() * step_min / 60.0), "in_window": bool(in_window.any()),
             "night_noon_mjd": float(noon), "query": query_summary(q)}

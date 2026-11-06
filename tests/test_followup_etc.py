@@ -81,3 +81,15 @@ def test_moon_against_astropy():
     assert np.max(sep) < 1.0      # formula: equinox of date; astropy: ICRS-aligned (~0.36 deg precession by 2027)
     _, _, _, fli = etc.moon_state(mjd, 33.674, 51.3188)
     assert np.max(np.abs(fli - ref_fli)) < 0.01
+
+
+def test_best_limit_bounds_the_darkest_sky():
+    """The engine's pre-cut must bound the limit under the darkest sky the INO model allows: a thin Moon (FLI floor
+    1e-3) above the horizon, far from the target, at airmass 1 -- darker than 'Moon below the horizon'."""
+    from followup import engine
+    q = engine.Query(mode="etc", band="r", snr_target=10, t_exp_total=3600)
+    thin_moon_up = etc.sky_mag(INO, 0.0, 0.0, 1.0, 180.0, 0.0, 30.0, 1e-3)
+    moon_down = etc.sky_mag(INO, 0.0, 0.0, 1.0, 180.0, 0.0, -30.0, 0.5)
+    assert thin_moon_up > moon_down
+    lim = etc.limiting_mag(INO, "r", 10, 3600, 1.0, thin_moon_up)
+    assert engine.best_limit(q) >= lim - 1e-9

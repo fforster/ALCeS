@@ -521,7 +521,7 @@ function renderObject(o) {
     stands for ${o.weight_10yr.toPrecision(3)} real events in 10 yr${yrs ? ` · <b>shifted ${yrs > 0 ? "+" : ""}${yrs} yr</b> from its simulated date (folding; the Rubin points show the cadence of the simulated year)` : ""}<br>
     <span style="color:var(--muted)">${prov}</span>
     <a style="float:right;color:var(--accent);cursor:pointer" id="objclose" title="Close this panel">close</a></p>
-    <p class="cap">Lines: noiseless model per band (thick: the follow-up band). Points: Rubin detections with 1σ errors (click a band in the legend to toggle its curve and points; non-detections are off by default). Vertical lines: first detection (solid), maximum light (dotted) and the follow-up window (dashed: ${q.t_min} d after detection to ${q.t_max} d after maximum); horizontal dashed: the magnitude limit. The view stops 2 mag below the limit; double-click the plot to see everything. Background: <b>grey</b> = observable from the site (night and airmass ≤ ${q.airmass_max}); <b>blue</b> = followable (all limits met). <b>Click any point of the curves to see that night</b> (magnitude and airmass through the night).</p>
+    <p class="cap">Lines: noiseless model per band (thick: the follow-up band). Points: Rubin detections with 1σ errors (click a band in the legend to toggle its curve and points; non-detections are off by default). Vertical lines: first detection (solid), maximum light (dotted) and the follow-up window (dashed: ${q.t_min} d after detection to ${q.t_max} d after maximum); dashed in the follow-up band: the limiting magnitude (fixed, or in ETC mode the deepest value at this position each night, which follows airmass and the Moon). The view stops 2 mag below the limit; double-click the plot to see everything. Background: <b>grey</b> = observable from the site (night and airmass ≤ ${q.airmass_max}); <b>blue</b> = followable (all limits met). <b>Click any point of the curves to see that night</b> (magnitude and airmass through the night). Icons along the bottom: Moon phase every 7 days (hover for the illuminated fraction).</p>
     <div id="p_lc" class="plot" style="height:400px"></div>
     <div id="nightbox"></div>`;
   $("objclose").onclick = () => { card.hidden = true; LASTOBJ = null; };
@@ -553,19 +553,25 @@ function renderObject(o) {
   }
   // default view: from the brightest model point down to at most 2 mag fainter than the follow-up limit
   // (double-click the plot to autoscale to everything)
-  const lim0 = q.mode === "etc" ? o.mag_limit_best : q.mag_lim;   // ETC: faintest reachable (airmass 1, dark sky)
-  const lo = Math.min(...allm, lim0) - 0.7, hi = Math.min(Math.max(...allm, lim0) + 0.7, lim0 + 2);
+  const etcMode = q.mode === "etc";
+  const ln = o.limit_nightly || {t: [], mag: []};
+  if (etcMode && ln.t.length) traces.push({x: ln.t, y: ln.mag, type: "scatter", mode: "lines+markers",
+    name: `${q.band} limit at this position (SNR ${q.snr_target} in ${fmt(q.t_exp_total / 60, 0)} min, best per night)`,
+    line: {color: css(BAND_COLOR[q.band]), width: 1.5, dash: "dash"}, marker: {size: 3, color: css(BAND_COLOR[q.band])},
+    hovertemplate: `limit %{y:.2f} mag (deepest that night) at %{x:.1f} d<extra></extra>`});
+  // y range: curves plus the limit (fixed, or the nightly ETC values)
+  const limv = etcMode ? (ln.mag.length ? ln.mag : [o.mag_limit_best]) : [q.mag_lim];
+  const lo = Math.min(...allm, ...limv) - 0.7, hi = Math.min(Math.max(...allm, ...limv) + 0.7, Math.max(...limv) + 2);
   const shade = (iv, color, layer = "below") => iv.map(([a, b]) => ({type: "rect", xref: "x", yref: "paper", x0: a, x1: b, y0: 0, y1: 1,
     fillcolor: color, line: {width: 0}, layer}));
   const vline = (x, dash) => ({type: "line", xref: "x", yref: "paper", x0: x, x1: x, y0: 0, y1: 1, line: {color: css("--ink2"), width: 1, dash}});
   const shapes = [...shade(o.observable, css("--grid")), ...shade(o.followable, css("--accent") + "40"),
     vline(0, "solid"), vline(q.t_min, "dash"), vline(pk, "dot"), vline(wEnd, "dash")];
   const xr = [Math.min(-30, pk - 10), Math.max(wEnd, pk) + 30];
-  Plotly.newPlot("p_lc", traces, layout({hovermode: "closest", shapes: [...shapes,
-      {type: "line", xref: "paper", yref: "y", x0: 0, x1: 1, y0: lim0, y1: lim0, line: {color: css(BAND_COLOR[q.band]), width: 1.2, dash: "dash"}}],
-    annotations: [{xref: "paper", yref: "y", x: 1, y: q.mag_lim, xanchor: "right", yanchor: "bottom", showarrow: false,
-                   text: q.mode === "etc" ? `${q.band} best-case ETC limit ${lim0.toFixed(1)} (airmass 1, dark sky; see the night view)` : `${q.band} limit ${q.mag_lim}`,
-                   font: {size: 11, color: css("--ink2")}},
+  Plotly.newPlot("p_lc", traces, layout({hovermode: "closest", shapes: etcMode ? shapes : [...shapes,
+      {type: "line", xref: "paper", yref: "y", x0: 0, x1: 1, y0: q.mag_lim, y1: q.mag_lim, line: {color: css(BAND_COLOR[q.band]), width: 1.2, dash: "dash"}}],
+    annotations: [...moonIcons(o, xr), ...(etcMode ? [] : [{xref: "paper", yref: "y", x: 1, y: q.mag_lim, xanchor: "right",
+                   yanchor: "bottom", showarrow: false, text: `${q.band} limit ${q.mag_lim}`, font: {size: 11, color: css("--ink2")}}]),
                   {xref: "x", yref: "paper", x: pk, y: 1, yanchor: "bottom", showarrow: false, text: "max light",
                    font: {size: 11, color: css("--ink2")}}],
     xaxis: {range: xr, title: {text: "days since first Rubin detection · grey: observable · blue: followable"}}, yaxis: {autorange: false, range: [hi, lo], title: {text: "AB magnitude"}, rangemode: "normal"},
@@ -573,6 +579,21 @@ function renderObject(o) {
   // click a point of the light curve -> that night in detail
   $("p_lc").on("plotly_click", ev => { const p = ev.points && ev.points[0]; if (p) loadNight(o, o.t_fd + p.x); });
   if (LASTNIGHT && LASTNIGHT.key === objKey(o)) renderNight(o, LASTNIGHT.data);
+}
+
+// Moon phase icons every 7 days (local midnight), along the bottom of the light-curve plot
+const MOON_ICONS = ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"];
+function moonIcons(o, xr) {
+  if (!o.moon) return [];
+  const out = [];
+  for (let i = 0; i < o.moon.t.length; i += 7) {
+    const t = o.moon.t[i];
+    if (t < xr[0] || t > xr[1]) continue;
+    const k = Math.round(o.moon.elong[i] / 45) % 8;       // 0 new, 2 first quarter, 4 full, 6 last quarter
+    out.push({xref: "x", yref: "paper", x: t, y: 0.01, yanchor: "bottom", showarrow: false, text: MOON_ICONS[k],
+              font: {size: 15}, hovertext: `Moon ${Math.round(100 * o.moon.fli[i])}% illuminated (${t.toFixed(0)} d)`});
+  }
+  return out;
 }
 
 // ---------- one event during one night: magnitude and airmass ----------
@@ -598,7 +619,7 @@ function renderNight(o, n) {
   box.innerHTML = `<h2 style="margin-top:14px">Night starting ${isoDate(n.night_noon_mjd)} <span style="font-weight:400;color:var(--ink2)">(local; ${dayStart}–${dayEnd} d after first detection)</span>
       <a style="float:right;color:var(--accent);cursor:pointer;font-size:13px;font-weight:400" id="nightclose" title="Close the night view">close</a></h2>
     <p class="cap">${n.in_window ? "" : "<b>Outside the follow-up window.</b> "}Model magnitude and airmass from sunset to sunrise (UTC). Background: <b>grey</b> = dark (Sun below ${q.sun_alt}°); <b>blue</b> = followable (${limitText(q)}, airmass ≤ ${q.airmass_max}, inside the window)${q.mode === "etc" ? `; dashed: limiting magnitude for the target SNR within the maximum exposure, which follows airmass and the Moon` : ""}: <b>${n.followable_hours.toFixed(1)} h</b> this night.</p>
-    <div id="p_nmag" class="plot" style="height:230px"></div><div id="p_nam" class="plot" style="height:190px"></div>`;
+    <div id="p_nmag" class="plot" style="height:230px"></div><div id="p_nam" class="plot" style="height:220px"></div>`;
   $("nightclose").onclick = () => { box.innerHTML = ""; LASTNIGHT = null; };
   const shade = (iv, color) => iv.map(([a, b]) => ({type: "rect", xref: "x", yref: "paper", x0: utcStr(a), x1: utcStr(b),
     y0: 0, y1: 1, fillcolor: color, line: {width: 0}, layer: "below"}));
@@ -620,11 +641,35 @@ function renderNight(o, n) {
     yaxis: {autorange: false, range: [hi, lo], rangemode: "normal", title: {text: "model AB mag"}},
     legend: {orientation: "h", y: 1.2, x: 0, font: {size: 11, color: css("--ink2")}}}), CFG);
   const xmax = Math.max(3, q.airmass_max + 0.5);
-  Plotly.newPlot("p_nam", [{x: t, y: n.airmass, type: "scatter", mode: "lines", name: "airmass", line: {color: css("--ink"), width: 2},
-      hovertemplate: "airmass %{y:.2f} at %{x|%H:%M} UTC<extra></extra>"}],
-    layout({showlegend: false, hovermode: "x unified", margin: {l: 52, r: 12, t: 8, b: 40},
+  const amTr = [{x: t, y: n.airmass, type: "scatter", mode: "lines", name: "event", line: {color: css("--ink"), width: 2},
+      hovertemplate: "event airmass %{y:.2f} at %{x|%H:%M} UTC<extra></extra>"}];
+  if (n.moon) amTr.push({x: t, y: n.moon.airmass, type: "scatter", mode: "lines",
+      name: `Moon (${Math.round(100 * n.moon.fli)}% illuminated, ${n.moon.sep_deg}° from the event)`,
+      line: {color: css("--s4"), width: 2, dash: "dot"}, hovertemplate: "Moon airmass %{y:.2f} at %{x|%H:%M} UTC<extra></extra>"});
+  // ETC mode: limiting magnitude at the event's position on a right-hand axis (user request). Deeper (fainter)
+  // limits are drawn higher, matching low airmass at the top of the left axis; range from values within the airmass cut
+  const etcMode = q.mode === "etc";
+  let y2 = null;
+  if (etcMode) {
+    const lc = css(BAND_COLOR[q.band]);
+    amTr.push({x: t, y: n.mag_limit, yaxis: "y2", type: "scatter", mode: "lines",
+      name: `${q.band} limit (SNR ${q.snr_target} in ${fmt(q.t_exp_total / 60, 0)} min, right axis)`,
+      line: {color: lc, width: 1.8, dash: "dash"}, hovertemplate: "limit %{y:.2f} mag at %{x|%H:%M} UTC<extra></extra>"});
+    const ok = n.mag_limit.filter((v, i) => v != null && n.airmass[i] != null && n.airmass[i] <= q.airmass_max);
+    const lv = ok.length ? ok : n.mag_limit.filter(v => v != null);
+    if (lv.length) {
+      const l0 = Math.min(...lv) - 0.3, l1 = Math.max(...lv) + 0.3;
+      y2 = {overlaying: "y", side: "right", autorange: false, range: [l0, l1], rangemode: "normal", showgrid: false,
+            title: {text: `${q.band} limit (mag)`, font: {color: css("--ink2"), size: 12}},
+            tickfont: {color: css("--ink2"), size: 11}, zeroline: false, linecolor: css("--axis")};
+    }
+  }
+  Plotly.newPlot("p_nam", amTr,
+    layout({showlegend: true, legend: {orientation: "h", y: 1.25, x: 0, font: {size: 11, color: css("--ink2")}},
+      hovermode: "x unified", margin: {l: 52, r: y2 ? 56 : 12, t: 30, b: 40},
       shapes: [...shapes, hline(q.airmass_max, css("--ink2"))], xaxis: {type: "date", title: {text: "UTC"}},
-      yaxis: {autorange: false, range: [xmax, 1], rangemode: "normal", title: {text: "airmass"}}}), CFG);
+      yaxis: {autorange: false, range: [xmax, 1], rangemode: "normal", title: {text: "airmass"}},
+      ...(y2 ? {yaxis2: y2} : {})}), CFG);
 }
 
 function render(r) {
