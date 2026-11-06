@@ -123,3 +123,53 @@ def test_fold_years_preserves_rate(tmp_path):
     # literal dates outside the simulated span see nothing
     q.fold_years = False
     assert engine.run(q, tmp_path)["classes"][0]["N_detected"] == 0
+
+
+def _store_peak(tmp_path, n=30, seed=5, k0=30, dpk=10.0):
+    """Store with a pre-detection offset (k0) and maximum light dpk days after first detection."""
+    rng = np.random.default_rng(seed)
+    t_fd = rng.uniform(61000, 61040, n)
+    k = np.arange(-k0, N_DAYS + 1)
+    mag = np.full((n, len(BANDS), len(k)), np.inf, np.float32)
+    mag[:, 2, :] = 17.0 + 0.05 * np.abs(k[None, :] - dpk)       # brightest at t_fd + dpk, linear in time
+    d = dict(ra=rng.uniform(0, 360, n), dec=rng.uniform(-80, 20, n), z=np.full(n, 0.05), t_peak=t_fd + dpk,
+             weight=rng.uniform(0.5, 2, n), t_fd=t_fd, mag=mag.astype(np.float16))
+    np.savez(tmp_path / "P_WFD.npz", **d)
+    (tmp_path / "catalog.json").write_text(json.dumps({"bands": BANDS, "n_days": N_DAYS, "k0": k0, "entries": {
+        "P_WFD": {"class": "P", "survey": "WFD", "n_sim": n, "N_det_10yr": float(d["weight"].sum()),
+                  "t_fd_range": [61000, 61040], "survey_years": 2.0, "parts": []}}}))
+    return d
+
+
+def test_window_ends_t_max_after_maximum_light(tmp_path):
+    """Follow-up window t_fd + t_min .. t_peak + t_max (store with a pre-detection offset); the object view and the
+    night view agree with the counting engine."""
+    d = _store_peak(tmp_path)
+    engine.catalog.cache_clear(); engine.load.cache_clear()
+    q = engine.Query(classes=["P"], surveys=["WFD"], band="r", mag_lim=18.0, airmass_max=2.0, t_min=2.0, t_max=5.0,
+                     mjd_start=61000, mjd_end=61040, step_min=10)
+    r = engine.run(q, tmp_path)
+    grid = astro.time_grid(q.mjd_start, q.mjd_end + 10 + q.t_max, q.step_min)
+    dark = astro.night_mask(grid, q.lat, q.lon, q.height, q.sun_alt)
+    x = astro.airmass(d["ra"], d["dec"], astro.local_sidereal_deg(grid, q.lon), q.lat)
+    hours = np.zeros(len(d["ra"]))
+    for i in range(len(d["ra"])):
+        dt = grid - d["t_fd"][i]
+        m = 17.0 + 0.05 * np.abs(dt - 10.0)                      # same model (float16 grid: ~0.01 mag)
+        win = (dt >= q.t_min) & (dt <= 10.0 + q.t_max)
+        hours[i] = (win & dark & (m <= q.mag_lim) & (x[i] <= q.airmass_max)).sum() * q.step_min / 60
+    c = r["classes"][0]
+    fu = hours > 0
+    assert c["n_sim_followable"] == fu.sum() > 0
+    assert np.isclose(c["N_followable"], d["weight"][fu].sum())
+    sky = r["sky"]["followable"]
+    for i in range(sky["n"]):
+        j = sky["idx"][i]
+        o = engine.object_detail(q, "P", "WFD", j, 0.0, store=tmp_path)
+        assert o["window"] == [q.t_min, 10.0 + q.t_max]
+        assert abs(o["followable_hours"] - hours[j]) <= 1e-6
+        # night views (5-min grid) of the followable nights add up to the object's followable hours
+        nights = sorted({float(np.floor(a + o["t_fd"] + q.lon / 360 - 0.5)) for a, _ in o["followable"]})
+        tot = sum(engine.night_detail(q, "P", "WFD", j, 0.0, n + 1.0 - q.lon / 360, store=tmp_path)["followable_hours"]
+                  for n in nights)
+        assert abs(tot - o["followable_hours"]) <= 0.25 * len(nights)

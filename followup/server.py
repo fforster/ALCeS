@@ -48,21 +48,21 @@ class RunRequest(BaseModel):
 def meta():
     cat = engine.catalog(str(STORE["path"]))
     ent = cat["entries"]
-    classes = sorted({e["class"] for e in ent.values()}, key=lambda c: list(engine_order()).index(c)
-                     if c in engine_order() else 99)
+    classes = sorted({e["class"] for e in ent.values()}, key=lambda c: CLASS_ORDER.index(c)
+                     if c in CLASS_ORDER else 99)
     lo = min(e["t_fd_range"][0] for e in ent.values())
     hi = max(e["t_fd_range"][1] for e in ent.values())
     return {"classes": classes, "surveys": sorted({e["survey"] for e in ent.values()}, reverse=True),
-            "bands": cat["bands"], "n_days": cat["n_days"], "mjd_range": [lo, hi],
-            "entries": {k: {kk: v[kk] for kk in ("class", "survey", "n_sim", "N_det_10yr", "parts")}
+            "bands": cat["bands"], "n_days": cat["n_days"], "k0": cat.get("k0", 0), "mjd_range": [lo, hi],
+            "source": cat.get("source", "native-rate sweeps"),
+            "entries": {k: {kk: v.get(kk) for kk in ("class", "survey", "n_sim", "N_det_10yr", "z_range")}
                         for k, v in ent.items()},
             "sites": [{"region": r, "name": n, "lat": la, "lon": lo, "height": h} for r, n, la, lo, h in SITES],
             "galactic_plane": galactic_plane()}
 
 
-def engine_order():
-    from .build import CLASSES
-    return CLASSES
+CLASS_ORDER = ["SNIa", "SNIa-91bg", "SNIax", "SNII", "SNIIn", "SNIbc", "SLSN-I", "TDE", "KN-Bulla19", "KN-K17",
+               "ILOT", "CaRT", "PISN-MOSFIT", "PISN-He", "PISN-H"]
 
 
 class ObjectRequest(RunRequest):
@@ -70,6 +70,22 @@ class ObjectRequest(RunRequest):
     survey: str
     idx: int = Field(ge=0)
     shift: float = 0.0
+
+
+class NightRequest(ObjectRequest):
+    mjd: float                               # any time inside the night (local noon to noon)
+
+
+@app.post("/api/night")
+def api_night(req: NightRequest):
+    """One event during one night: model magnitudes, airmass, Sun altitude and the followable intervals."""
+    q = engine.Query(**{f.name: getattr(req, f.name) for f in fields(engine.Query)})
+    if q.lon > 180:
+        q.lon -= 360
+    try:
+        return engine.night_detail(q, req.cls, req.survey, req.idx, req.shift, req.mjd, STORE["path"])
+    except (ValueError, FileNotFoundError, KeyError, IndexError) as e:
+        raise HTTPException(400, str(e))
 
 
 @app.post("/api/object")

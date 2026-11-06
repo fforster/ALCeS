@@ -1,18 +1,20 @@
-"""Follow-up potential of Rubin-detected transients from a ground site (native-rate ALCeS simulations).
+"""Follow-up potential of Rubin-detected transients from a ground site (ALCeS simulations, real-event weights).
 
 Steps (per request):
- 0. time grid [T0, T1 + t_max] with step dt;
+ 0. time grid [T0, T1 + longest follow-up window] with step dt;
  1. keep the steps where the Sun is below `sun_alt` (astronomical night by default) at the site;
- 2. for each simulated detected object whose first Rubin detection t_fd falls in [T0 - t_max, T1], and each night
-    step t with t_min <= t - t_fd <= t_max, interpolate the noiseless MODEL magnitude in `band` and require
-    m <= mag_lim;
+ 2. for each simulated detected object (first Rubin detection t_fd, time of maximum light t_peak) and each night step t
+    in its follow-up window  t_fd + t_min <= t <= t_peak + t_max  (t_min: days after first detection; t_max: days after
+    maximum light, the brightest model point in any band), interpolate the noiseless MODEL magnitude in `band` and
+    require m <= mag_lim;
  3. require airmass(t) <= airmass_max at the site;
  4. per object: hours and nights it is followable, delay from first detection to the first opportunity;
- 5. counts are expected REAL events: every simulated object carries a weight (real events per 10 yr represented by it,
-    native SNANA rates x footprint); a sum of weights over any selection is the expected number, with Poisson-like
-    error sqrt(sum w^2).
+ 5. counts are expected REAL events: every simulated object carries a weight (real detected events per 10 yr it
+    represents). Stores built from the flat-log-z training sets use W_EXPECTED, whose per-redshift-bin sum is the native
+    rate times the detection efficiency measured in the simulations; native-rate stores use the sweep weights. Sums of
+    weights over any selection are expected numbers, with Poisson-like errors sqrt(sum w^2).
 Instantaneous counts N(t) cover t in [T0, T1]; per-object statistics cover the objects first detected in [T0, T1]
-(followed up to t_fd + t_max even beyond T1, so they are not truncated).
+(followed to the end of their window even beyond T1, so they are not truncated).
 """
 from __future__ import annotations
 
@@ -25,7 +27,11 @@ import numpy as np
 
 from . import astro
 
-STORE = Path("~/data/alces_followup").expanduser()
+NATIVE_STORE = Path("~/data/alces_followup").expanduser()
+TRAIN_STORE = Path("~/data/alces_followup_train").expanduser()
+# default: the flat-log-z training-set store (user decision 2026-11-06) once built, else the native-rate store
+STORE = TRAIN_STORE if (TRAIN_STORE / "catalog.json").exists() else NATIVE_STORE
+TRAINSETS = Path("~/data/alces_trainsets_20261026").expanduser()
 MAX_PAIRS = 8_000_000
 
 
@@ -39,8 +45,8 @@ class Query:
     band: str = "r"
     mag_lim: float = 20.0
     airmass_max: float = 2.0
-    t_min: float = 0.0               # days since first detection
-    t_max: float = 30.0
+    t_min: float = 0.0               # follow-up starts t_min days after the first Rubin detection
+    t_max: float = 30.0              # ... and ends t_max days after maximum light (brightest point in any band)
     mjd_start: float = 61400.0
     mjd_end: float = 61765.0
     step_min: float = 15.0
@@ -68,17 +74,42 @@ YEAR = 365.25
 N_SURVEY_YEARS = 10
 
 
+def grid_spec(cat):
+    """(k0, n_days): the store's magnitude grid covers t_fd - k0 .. t_fd + n_days in daily steps (index = dt + k0)."""
+    return int(cat.get("k0", 0)), int(cat["n_days"])
+
+
+def window_end(d, q, n_days):
+    """Follow-up window end relative to t_fd: t_peak - t_fd + t_max (t_peak = maximum light), within the store grid.
+    Objects without a time of maximum fall back to t_fd + t_max."""
+    dpk = d["t_peak"] - d["t_fd"]
+    return np.clip(np.where(np.isfinite(dpk), dpk, 0.0) + q.t_max, None, n_days)
+
+
+def interp_mag(magb, rows, dt, k0, n_days):
+    """Linear interpolation of store magnitudes (rows of magb) at dt days after t_fd; +inf outside or without flux."""
+    kf = np.clip(dt + k0, 0, k0 + n_days - 1e-6)
+    k = kf.astype(np.int64)
+    f = (kf - k).astype(np.float32)
+    m0 = magb[rows, k].astype(np.float32)
+    m1 = magb[rows, np.minimum(k + 1, k0 + n_days)].astype(np.float32)
+    inside = (dt + k0 >= 0) & (dt <= n_days)
+    with np.errstate(invalid="ignore"):
+        return np.where(inside & np.isfinite(m0) & np.isfinite(m1), m0 + f * (m1 - m0), np.inf)
+
+
 def survey_year(t_fd, t_survey0):
     """0-based survey year of a first detection (year 0 starts at the first simulated detection)."""
     return np.clip(np.floor((np.asarray(t_fd) - t_survey0) / YEAR).astype(int), 0, N_SURVEY_YEARS - 1)
 
 
-def _instances(d, q, years_used, t_survey0):
+def _instances(d, q, years_used, t_survey0, lead):
     """(source index, first-detection MJD, weight, source survey year) of the objects used for this query.
 
     fold_years=False: the simulated objects at their simulated dates.
     fold_years=True : every simulated object first detected in one of `years_used` is also placed at
-    t_fd + m * 365.25 d for every integer m that lands in [T0 - t_max, T1]. RA/Dec, light curve and the Sun-object
+    t_fd + m * 365.25 d for every integer m that lands in [T0 - lead, T1] (lead: longest follow-up window after first
+    detection). RA/Dec, light curve and the Sun-object
     geometry are unchanged by a whole-year shift; the Rubin strategy is NOT (rolling stripes, survey changes), so the
     result is the window as it would be if every year were like the average of `years_used`. Each copy is weighted by
     1 / len(years_used), which preserves the expected rate of those years."""
@@ -88,7 +119,7 @@ def _instances(d, q, years_used, t_survey0):
     if not q.fold_years:
         return np.arange(n), t_fd, w, yr
     keep = np.isin(yr, years_used)
-    lo, hi = q.mjd_start - q.t_max, q.mjd_end
+    lo, hi = q.mjd_start - lead, q.mjd_end
     m0 = np.ceil((lo - t_fd) / YEAR).astype(int)
     m1 = np.floor((hi - t_fd) / YEAR).astype(int)
     cnt = np.where(keep, np.maximum(m1 - m0 + 1, 0), 0)
@@ -140,6 +171,32 @@ def _run_tables(sweep: str, run: str):
     return ph.astype({"SNID": str}), dn.astype({"SNID": str})
 
 
+@lru_cache(maxsize=4)
+def _train_phot(case: str):
+    """Rubin photometry of a training set's selected objects (flat-log-z sets), indexed by (run, SNID)."""
+    import pandas as pd
+    ph = pd.read_parquet(TRAINSETS / "transients" / case / "selected_phot.parquet",
+                         columns=["run", "SNID", "MJD", "FLT", "FLUXCAL", "FLUXCALERR", "PHOTFLAG"])
+    return ph.astype({"SNID": str}).set_index(["run", "SNID"]).sort_index()
+
+
+def _phot_table(p, shift, t_fd, zp=31.4):
+    phot = {}
+    for b, g in p.groupby("FLT"):
+        det = (g.PHOTFLAG.astype(int) & 4096) > 0
+        fl, er = g.FLUXCAL.to_numpy(), g.FLUXCALERR.to_numpy()
+        with np.errstate(divide="ignore", invalid="ignore"):
+            mag = np.where(fl > 0, zp - 2.5 * np.log10(fl), np.nan)
+            merr = 1.0857 * er / np.abs(fl)
+            lim5 = zp - 2.5 * np.log10(5 * er)
+        t = g.MJD.to_numpy() + shift - t_fd
+        phot[b] = {"t": np.round(t, 4).tolist(), "det": det.tolist(),
+                   "mag": [None if not np.isfinite(x) else round(float(x), 3) for x in mag],
+                   "err": [None if not np.isfinite(x) else round(float(x), 3) for x in merr],
+                   "lim5": [None if not np.isfinite(x) else round(float(x), 3) for x in lim5]}
+    return phot
+
+
 def object_detail(q: Query, cls: str, survey: str, idx: int, shift: float = 0.0, store: Path = STORE,
                   pad_before: float = 30.0, pad_after: float = 30.0):
     """Everything the GUI shows for one simulated event: model light curve, Rubin photometry and visibility windows.
@@ -151,18 +208,29 @@ def object_detail(q: Query, cls: str, survey: str, idx: int, shift: float = 0.0,
     if not 0 <= idx < len(d["ra"]):
         raise ValueError("object index out of range")
     bands = cat["bands"]
+    k0_grid, n_days = grid_spec(cat)
     zp = 31.4
     ra, dec = float(d["ra"][idx]), float(d["dec"][idx])
     t_fd = float(d["t_fd"][idx]) + shift
+    wend = float(window_end(d, q, n_days)[idx])
     out = {"cls": cls, "survey": survey, "idx": idx, "shift_days": shift, "ra": ra, "dec": dec,
            "z": float(d["z"][idx]), "t_fd": t_fd, "t_peak": float(d["t_peak"][idx]) + shift,
-           "weight_10yr": float(d["weight"][idx]), "bands": bands}
-    has_prov = "run" in d
-    if has_prov:
+           "window": [q.t_min, wend], "weight_10yr": float(d["weight"][idx]), "bands": bands,
+           "t_peak_is_max_light": bool(cat.get("k0", 0) > 0)}
+    native = "sweep" in d                     # native-rate store: full dense curves on disk
+    training = "case" in d                    # flat-log-z training store: daily grid + selected_phot
+    if native:
         out.update(sweep=str(d["sweep"][idx]), run=str(d["run"][idx]), snid=str(d["snid"][idx]))
+    elif training:
+        out.update(case=str(d["case"][idx]), run=str(d["run"][idx]), snid=str(d["snid"][idx]))
     # --- light curves (relative to the first detection); the store's daily model mags are the fallback
     model, phot = {}, {}
-    if has_prov:
+    if training:
+        try:
+            phot = _phot_table(_train_phot(out["case"]).loc[(out["run"], out["snid"])].reset_index(), shift, t_fd)
+        except KeyError:
+            phot = {}
+    if native:
         ph, dn = _run_tables(out["sweep"], out["run"])
         m = dn[dn.SNID == out["snid"]]
         for b, g in m.groupby("FLT"):
@@ -184,39 +252,71 @@ def object_detail(q: Query, cls: str, survey: str, idx: int, shift: float = 0.0,
                        "mag": [None if not np.isfinite(x) else round(float(x), 3) for x in mag],
                        "err": [None if not np.isfinite(x) else round(float(x), 3) for x in merr],
                        "lim5": [None if not np.isfinite(x) else round(float(x), 3) for x in lim5]}
-    else:
-        k = np.arange(cat["n_days"] + 1)
+    if not native:
+        k = np.arange(-k0_grid, n_days + 1)
         for i, b in enumerate(bands):
             mm = d["mag"][idx, i].astype(float)
             ok = np.isfinite(mm)
             model[b] = {"t": k[ok].tolist(), "mag": np.round(mm[ok], 3).tolist()}
     out["model"], out["phot"] = model, phot
-    # --- visibility on the query grid, from t_fd - pad_before to t_fd + t_max + pad_after
+    # --- visibility on the query grid, from t_fd - pad_before to the window end + pad_after
     step = q.step_min / 1440.0
     # same phase as the counting grid (which starts at mjd_start), so the followable hours agree exactly
     t0 = q.mjd_start + np.floor((t_fd - pad_before - q.mjd_start) / step) * step
-    t1 = t_fd + q.t_max + pad_after
+    t1 = t_fd + max(wend, 0.0) + pad_after
     grid = astro.time_grid(t0, t1, q.step_min)
     dark = astro.night_mask(grid, q.lat, q.lon, q.height, q.sun_alt)
     alt = astro.altitude(ra, dec, astro.local_sidereal_deg(grid, q.lon), q.lat)
     x = astro.airmass_from_alt(alt)
     observable = dark & (x <= q.airmass_max)
-    # the same model magnitudes as the counting engine (store grid: daily from t_fd, linear interpolation)
+    # the same model magnitudes as the counting engine (store grid, linear interpolation)
     b = bands.index(q.band)
-    magb = d["mag"][idx, b].astype(np.float32)
     dt = grid - t_fd
-    kf = np.clip(dt, 0, cat["n_days"] - 1e-6)
-    kk = kf.astype(int)
-    m0, m1 = magb[kk], magb[np.minimum(kk + 1, cat["n_days"])]
-    with np.errstate(invalid="ignore"):
-        mag_q = np.where(np.isfinite(m0) & np.isfinite(m1), m0 + (kf - kk) * (m1 - m0), np.inf)
-    followable = observable & (dt >= q.t_min) & (dt <= q.t_max) & (mag_q <= q.mag_lim)
+    mag_q = interp_mag(d["mag"][:, b, :], np.full(len(dt), idx), dt, k0_grid, n_days)
+    followable = observable & (dt >= q.t_min) & (dt <= wend) & (mag_q <= q.mag_lim)
     out["observable"] = [[a - t_fd, e - t_fd] for a, e in _intervals(grid, observable, step)]
     out["followable"] = [[a - t_fd, e - t_fd] for a, e in _intervals(grid, followable, step)]
     out["followable_hours"] = float(followable.sum() * q.step_min / 60.0)
     out["query"] = {"band": q.band, "mag_lim": q.mag_lim, "airmass_max": q.airmass_max,
-                    "t_min": q.t_min, "t_max": q.t_max}
+                    "t_min": q.t_min, "t_max": q.t_max, "sun_alt": q.sun_alt}
     return out
+
+
+def night_detail(q: Query, cls: str, survey: str, idx: int, shift: float, mjd: float, store: Path = STORE,
+                 step_min: float = 5.0):
+    """One event during one local night (local noon to noon around `mjd`): model magnitudes in every band, airmass,
+    Sun altitude, and when it meets all follow-up limits."""
+    cat = catalog(str(store))
+    d = load(cls, survey, str(store))
+    bands = cat["bands"]
+    k0_grid, n_days = grid_spec(cat)
+    t_fd = float(d["t_fd"][idx]) + shift
+    wend = float(window_end(d, q, n_days)[idx])
+    night = np.floor(mjd + q.lon / 360.0 - 0.5)
+    noon = night + 0.5 - q.lon / 360.0                       # MJD of the local noon that starts the night
+    grid = astro.time_grid(noon, noon + 1.0, step_min)
+    sun = astro.sun_altitude(grid, q.lat, q.lon)
+    keep = sun < 0.0                                          # sunset to sunrise
+    if not keep.any():
+        raise ValueError("the Sun does not set at this site on that date")
+    grid, sun = grid[keep], sun[keep]
+    alt = astro.altitude(float(d["ra"][idx]), float(d["dec"][idx]), astro.local_sidereal_deg(grid, q.lon), q.lat)
+    x = astro.airmass_from_alt(alt)
+    dt = grid - t_fd
+    mags = {bb: interp_mag(d["mag"][:, i, :], np.full(len(dt), idx), dt, k0_grid, n_days)
+            for i, bb in enumerate(bands)}
+    dark = sun < q.sun_alt
+    in_window = (dt >= q.t_min) & (dt <= wend)
+    followable = dark & (x <= q.airmass_max) & in_window & (mags[q.band] <= q.mag_lim)
+    step = step_min / 1440.0
+    fin = lambda a: [None if not np.isfinite(v) else round(float(v), 3) for v in a]  # noqa: E731
+    return {"mjd": np.round(grid, 6).tolist(), "days_since_fd": np.round(dt, 4).tolist(),
+            "sun_alt": np.round(sun, 2).tolist(), "airmass": fin(np.where(alt > 0, x, np.nan)),
+            "alt": np.round(alt, 2).tolist(), "mag": {bb: fin(m) for bb, m in mags.items()},
+            "dark": _intervals(grid, dark, step), "followable": _intervals(grid, followable, step),
+            "followable_hours": float(followable.sum() * step_min / 60.0), "in_window": bool(in_window.any()),
+            "night_noon_mjd": float(noon), "query": {"band": q.band, "mag_lim": q.mag_lim,
+                                                      "airmass_max": q.airmass_max, "sun_alt": q.sun_alt}}
 
 
 def _hist(x, w, bins):
@@ -228,17 +328,25 @@ def _hist(x, w, bins):
 def run(q: Query, store: Path = STORE):
     cat = catalog(str(store))
     bands = cat["bands"]
-    n_days = cat["n_days"]
+    k0_grid, n_days = grid_spec(cat)
     if q.band not in bands:
         raise ValueError(f"band must be one of {bands}")
-    if not (0 <= q.t_min < q.t_max <= n_days):
-        raise ValueError(f"need 0 <= t_min < t_max <= {n_days} d")
+    if not (0 <= q.t_min < n_days and 0 < q.t_max <= n_days):
+        raise ValueError(f"need 0 <= t_min < {n_days} d and 0 < t_max <= {n_days} d")
     if q.mjd_end <= q.mjd_start:
         raise ValueError("mjd_end must be after mjd_start")
     span = q.mjd_end - q.mjd_start
+    # longest follow-up window after first detection among the requested classes (maximum light + t_max)
+    lead = 0.0
+    for name in q.classes:
+        for survey in q.surveys:
+            if f"{name}_{survey}" in cat["entries"]:
+                we = window_end(load(name, survey, str(store)), q, n_days)
+                lead = max(lead, float(np.max(we)) if len(we) else 0.0)
+    lead = max(lead, q.t_max)
     step = max(q.step_min, 1.0)
     # keep the grid manageable for long windows
-    step = max(step, (span + q.t_max) * 1440.0 / 400_000)
+    step = max(step, (span + lead) * 1440.0 / 400_000)
     b = bands.index(q.band)
     t_survey0 = min(e["t_fd_range"][0] for e in cat["entries"].values())
     years_used = sorted({int(y) for y in (q.fold_year_list if q.fold_year_list is not None
@@ -246,7 +354,7 @@ def run(q: Query, store: Path = STORE):
     if q.fold_years and (not years_used or not all(0 <= y < N_SURVEY_YEARS for y in years_used)):
         raise ValueError(f"fold_year_list must hold survey years 0..{N_SURVEY_YEARS - 1}")
 
-    grid = astro.time_grid(q.mjd_start, q.mjd_end + q.t_max, step)
+    grid = astro.time_grid(q.mjd_start, q.mjd_end + lead, step)
     night = astro.night_mask(grid, q.lat, q.lon, q.height, q.sun_alt)
     tn = grid[night]
     lst = astro.local_sidereal_deg(tn, q.lon) if len(tn) else np.zeros(0)
@@ -257,9 +365,10 @@ def run(q: Query, store: Path = STORE):
     zmax_deg = np.degrees(np.arccos(1.0 / q.airmass_max)) + 0.5
 
     # followable objects have >= 1 step; log bins from one step to the longest possible (12 h per night)
-    hours_bins = np.geomspace(0.999 * step / 60.0, max((q.t_max - q.t_min + 1) * 12.0, 1.0), 25)
-    delay_bins = np.linspace(q.t_min, q.t_max, 31)
-    nights_bins = np.arange(0, int(np.ceil(q.t_max - q.t_min)) + 3) - 0.5
+    wlen = max(lead - q.t_min, 1.0)
+    hours_bins = np.geomspace(0.999 * step / 60.0, max((wlen + 1) * 12.0, 1.0), 25)
+    delay_bins = np.linspace(q.t_min, q.t_min + wlen, 31)
+    nights_bins = np.arange(0, int(np.ceil(wlen)) + 3) - 0.5
 
     ts_total = np.zeros(len(tn))
     per_class, ts_class, night_class = [], {}, {}
@@ -280,18 +389,19 @@ def run(q: Query, store: Path = STORE):
                 continue
             d = load(name, survey, str(store))
             # instances: the simulated objects themselves, or (fold_years) copies shifted by whole years
-            src, t_fd, w, yr = _instances(d, q, years_used, t_survey0)
+            src, t_fd, w, yr = _instances(d, q, years_used, t_survey0, lead)
             ra, dec = d["ra"][src], d["dec"][src]
+            wend = window_end(d, q, n_days)[src]          # window end relative to t_fd, per instance
             in_range = (t_fd >= q.mjd_start) & (t_fd <= q.mjd_end)
             n_sim_det += int(len(np.unique(src[in_range])))
             n_inst_det += int(in_range.sum())
             w_det += float(w[in_range].sum())
             w2_det += float((w[in_range] ** 2).sum())
-            cand = (t_fd >= q.mjd_start - q.t_max) & (t_fd <= q.mjd_end)
+            cand = (t_fd + wend >= q.mjd_start) & (t_fd <= q.mjd_end) & (wend >= q.t_min)
             cand &= np.abs(dec - q.lat) <= zmax_deg
-            k0, k1 = int(np.floor(q.t_min)), int(np.ceil(q.t_max))
             magb = d["mag"][:, b, :]
-            magmin = np.min(magb[:, k0:k1 + 1].astype(np.float32), axis=1)
+            # pre-cut: brightest model point from t_fd + t_min to the end of the grid (window ends earlier)
+            magmin = np.min(magb[:, k0_grid + int(np.floor(q.t_min)):].astype(np.float32), axis=1)
             cand &= magmin[src] <= q.mag_lim
             idx = np.flatnonzero(cand)
             # every object in range gets a stats row (zeros if never followable)
@@ -300,7 +410,7 @@ def run(q: Query, store: Path = STORE):
             nnights = np.zeros(len(t_fd))
             if len(idx) and len(tn):
                 lo = np.searchsorted(tn, t_fd[idx] + q.t_min)
-                hi = np.searchsorted(tn, t_fd[idx] + q.t_max, side="right")
+                hi = np.searchsorted(tn, t_fd[idx] + wend[idx], side="right")
                 cnt = np.maximum(hi - lo, 0)
                 # chunk the objects so that the (object, time) pairs stay bounded
                 csum = np.cumsum(cnt)
@@ -316,13 +426,7 @@ def run(q: Query, store: Path = STORE):
                     j = np.concatenate([np.arange(a, z) for a, z in zip(lo[sl], hi[sl])])
                     o = idx[o_loc]
                     dt = tn[j] - t_fd[o]
-                    kf = np.clip(dt, 0, n_days - 1e-6)
-                    k = kf.astype(np.int64)
-                    f = (kf - k).astype(np.float32)
-                    m0 = magb[src[o], k].astype(np.float32)
-                    m1 = magb[src[o], np.minimum(k + 1, n_days)].astype(np.float32)
-                    with np.errstate(invalid="ignore"):
-                        m = np.where(np.isfinite(m0) & np.isfinite(m1), m0 + f * (m1 - m0), np.inf)
+                    m = interp_mag(magb, src[o], dt, k0_grid, n_days)
                     ok = m <= q.mag_lim
                     o, j, dt = o[ok], j[ok], dt[ok]
                     dec_r = np.radians(dec[o])
