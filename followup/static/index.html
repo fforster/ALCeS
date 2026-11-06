@@ -612,34 +612,26 @@ async function loadNight(o, mjd) {
     box.scrollIntoView({behavior: "smooth", block: "nearest"});
   } catch (e) { box.innerHTML = `<p class="cap" style="color:var(--critical)">Could not load the night: ${e.message}</p>`; }
 }
+// the event's model magnitude during the night: one value, or the range if it changes by more than 0.05 mag
+function nightMag(n, band) {
+  const v = (n.mag[band] || []).filter(x => x != null);
+  if (!v.length) return "not available (no model flux)";
+  const a = Math.min(...v), b = Math.max(...v);
+  return b - a < 0.05 ? a.toFixed(2) : `${a.toFixed(2)}–${b.toFixed(2)}`;
+}
 function renderNight(o, n) {
   const q = n.query, box = $("nightbox");
   const t = n.mjd.map(utcStr);
   const dayStart = Math.round(n.days_since_fd[0]), dayEnd = Math.round(n.days_since_fd[n.days_since_fd.length - 1]);
   box.innerHTML = `<h2 style="margin-top:14px">Night starting ${isoDate(n.night_noon_mjd)} <span style="font-weight:400;color:var(--ink2)">(local; ${dayStart}–${dayEnd} d after first detection)</span>
       <a style="float:right;color:var(--accent);cursor:pointer;font-size:13px;font-weight:400" id="nightclose" title="Close the night view">close</a></h2>
-    <p class="cap">${n.in_window ? "" : "<b>Outside the follow-up window.</b> "}Model magnitude and airmass from sunset to sunrise (UTC). Background: <b>grey</b> = dark (Sun below ${q.sun_alt}°); <b>blue</b> = followable (${limitText(q)}, airmass ≤ ${q.airmass_max}, inside the window)${q.mode === "etc" ? `; dashed: limiting magnitude for the target SNR within the maximum exposure, which follows airmass and the Moon` : ""}: <b>${n.followable_hours.toFixed(1)} h</b> this night.</p>
-    <div id="p_nmag" class="plot" style="height:230px"></div><div id="p_nam" class="plot" style="height:220px"></div>`;
+    <p class="cap">${n.in_window ? "" : "<b>Outside the follow-up window.</b> "}Airmass of the event and of the Moon from sunset to sunrise (UTC); the event's model ${q.band} magnitude this night is ${nightMag(n, q.band)}. Background: <b>grey</b> = dark (Sun below ${q.sun_alt}°); <b>blue</b> = followable (${limitText(q)}, airmass ≤ ${q.airmass_max}, inside the window)${q.mode === "etc" ? `; dashed, right axis: limiting magnitude for the target SNR within the maximum exposure, which follows airmass and the Moon` : ""}: <b>${n.followable_hours.toFixed(1)} h</b> this night.</p>
+    <div id="p_nam" class="plot" style="height:260px"></div>`;
   $("nightclose").onclick = () => { box.innerHTML = ""; LASTNIGHT = null; };
   const shade = (iv, color) => iv.map(([a, b]) => ({type: "rect", xref: "x", yref: "paper", x0: utcStr(a), x1: utcStr(b),
     y0: 0, y1: 1, fillcolor: color, line: {width: 0}, layer: "below"}));
   const shapes = [...shade(n.dark, css("--grid")), ...shade(n.followable, css("--accent") + "40")];
   const hline = (y, color) => ({type: "line", xref: "paper", yref: "y", x0: 0, x1: 1, y0: y, y1: y, line: {color, width: 1.2, dash: "dash"}});
-  const mtr = o.bands.filter(b => n.mag[b].some(v => v != null)).map(b => ({x: t, y: n.mag[b], type: "scatter", mode: "lines", name: b,
-    line: {color: css(BAND_COLOR[b] || "--other"), width: b === q.band ? 2.5 : 1.2},
-    hovertemplate: `${b}: %{y:.2f} mag at %{x|%H:%M} UTC<extra></extra>`}));
-  const fb = n.mag[q.band].filter(v => v != null);
-  // axis range from the limit where the airmass cut is met (near the horizon it shoots up and would squash the plot)
-  const limv = q.mode === "etc" ? n.mag_limit.filter((v, i) => v != null && n.airmass[i] != null && n.airmass[i] <= q.airmass_max) : [q.mag_lim];
-  if (!limv.length) limv.push(...n.mag_limit.filter(v => v != null));
-  if (q.mode === "etc") mtr.push({x: t, y: n.mag_limit, type: "scatter", mode: "lines", name: `${q.band} limit (ETC)`,
-    line: {color: css(BAND_COLOR[q.band]), width: 1.5, dash: "dash"},
-    hovertemplate: `limit: %{y:.2f} mag at %{x|%H:%M} UTC<extra></extra>`});
-  const lo = Math.min(...fb, ...limv) - 0.5, hi = Math.min(Math.max(...fb, ...limv) + 0.5, Math.max(...limv) + 2);
-  Plotly.newPlot("p_nmag", mtr, layout({hovermode: "x unified", margin: {l: 52, r: 12, t: 28, b: 24},
-    shapes: q.mode === "etc" ? shapes : [...shapes, hline(q.mag_lim, css(BAND_COLOR[q.band]))], xaxis: {type: "date"},
-    yaxis: {autorange: false, range: [hi, lo], rangemode: "normal", title: {text: "model AB mag"}},
-    legend: {orientation: "h", y: 1.2, x: 0, font: {size: 11, color: css("--ink2")}}}), CFG);
   const xmax = Math.max(3, q.airmass_max + 0.5);
   const amTr = [{x: t, y: n.airmass, type: "scatter", mode: "lines", name: "event", line: {color: css("--ink"), width: 2},
       hovertemplate: "event airmass %{y:.2f} at %{x|%H:%M} UTC<extra></extra>"}];
