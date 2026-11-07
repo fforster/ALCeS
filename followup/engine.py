@@ -66,6 +66,7 @@ class Query:
     t_exp_total: float = 3600.0      # s
     seeing: float = 1.15             # arcsec FWHM
     binning: int = 1
+    sky_model: str = "ino"          # ETC sky: "ino" (original INO calculator) or "ks91" (Krisciunas & Schaefer 1991)
 
 
 @lru_cache(maxsize=None)
@@ -106,6 +107,8 @@ def check_mode(q):
             raise ValueError(f"the {q.instrument} ETC has no {q.band} band (available: {', '.join(inst.bands)})")
         if not (q.snr_target > 0 and q.seeing > 0 and q.binning >= 1):
             raise ValueError("need snr_target > 0, seeing > 0 and binning >= 1")
+        if q.sky_model not in etc.SKY_MODELS:
+            raise ValueError(f"sky_model must be one of {etc.SKY_MODELS}")
         etc.exposure_plan(inst, q.t_exp_total)            # raises below the shortest exposure
 
 
@@ -117,18 +120,25 @@ def best_limit(q):
     if q.mode != "etc":
         return q.mag_lim
     inst = etc.INSTRUMENTS[q.instrument]
-    a, b, c = inst.sky_fit
-    dark_sky = c + a * np.exp(-b * 180.0) - inst.sky_extinction * 1.0 - 2.5 * np.log10(1e-3)
+    if q.sky_model == "ks91":
+        # KS91: airmass and moonlight only brighten the dark zenith sky
+        dark_sky = etc.DARK_SKY_ZENITH[q.band]
+    else:
+        a, b, c = inst.sky_fit
+        dark_sky = c + a * np.exp(-b * 180.0) - inst.sky_extinction * 1.0 - 2.5 * np.log10(1e-3)
     return float(etc.limiting_mag(inst, q.band, q.snr_target, q.t_exp_total, 1.0, dark_sky, q.seeing, q.binning))
 
 
-def limit_at(q, ra, dec, airmass, moon):
+def limit_at(q, ra, dec, airmass, moon, alt=None):
     """Limiting magnitude for (event, time) pairs: mag_lim, or the ETC limit for the pair's airmass and sky.
-    moon = (ra, dec, alt, fli) of the Moon at each pair's time (etc.moon_state)."""
+    moon = (ra, dec, alt, fli) of the Moon at each pair's time (etc.moon_state); alt = the event's altitude [deg]
+    (needed by the KS91 sky model; derived from the airmass if not given)."""
     if q.mode != "etc":
         return np.full(np.shape(airmass), float(q.mag_lim))
     inst = etc.INSTRUMENTS[q.instrument]
-    sky = etc.sky_mag(inst, ra, dec, airmass, *moon)
+    if alt is None:
+        alt = np.degrees(np.arcsin(np.clip(1.0 / np.asarray(airmass, float), 0.0, 1.0)))
+    sky = etc.sky(inst, q.sky_model, q.band, ra, dec, alt, airmass, moon)
     return etc.limiting_mag(inst, q.band, q.snr_target, q.t_exp_total, airmass, sky, q.seeing, q.binning)
 
 
@@ -190,6 +200,7 @@ def _sky_table(parts):
         "survey": sum(([p["survey"]] * m for p, m in zip(parts, n)), []),
         "idx": cat("idx").astype(int).tolist(), "shift": np.round(cat("shift"), 5).tolist(),
         "ra": np.round(cat("ra"), 4).tolist(), "dec": np.round(cat("dec"), 4).tolist(),
+        "z": np.round(cat("z"), 4).tolist(),
         "w": np.round(cat("w"), 4).tolist(), "hours": np.round(cat("hours"), 2).tolist(),
         "first": [None if not np.isfinite(x) else round(float(x), 3) for x in cat("first")],
         "sampled": {f"{p['cls']}_{p['survey']}": p["frac"] for p in parts},
@@ -324,7 +335,7 @@ def object_detail(q: Query, cls: str, survey: str, idx: int, shift: float = 0.0,
     if observable.any():
         sel = np.flatnonzero(observable)
         moon = etc.moon_state(grid[sel], q.lat, q.lon) if q.mode == "etc" else None
-        lim[sel] = limit_at(q, np.full(len(sel), ra), np.full(len(sel), dec), x[sel], moon)
+        lim[sel] = limit_at(q, np.full(len(sel), ra), np.full(len(sel), dec), x[sel], moon, alt=alt[sel])
     followable = observable & (dt >= q.t_min) & (dt <= wend) & (mag_q <= lim)
     # limiting magnitude at the event's position per night: the deepest value while observable (dark, airmass cut)
     lim_t, lim_m = [], []
@@ -370,7 +381,8 @@ def query_summary(q):
          "sun_alt": q.sun_alt, "mode": q.mode}
     if q.mode == "etc":
         s.update(instrument=q.instrument, instrument_name=etc.INSTRUMENTS[q.instrument].name,
-                 snr_target=q.snr_target, t_exp_total=q.t_exp_total, seeing=q.seeing, binning=q.binning)
+                 snr_target=q.snr_target, t_exp_total=q.t_exp_total, seeing=q.seeing, binning=q.binning,
+                 sky_model=q.sky_model)
     return s
 
 
@@ -408,9 +420,9 @@ def night_detail(q: Query, cls: str, survey: str, idx: int, shift: float, mjd: f
         if q.mode == "etc":
             moon = etc.moon_state(grid[up], q.lat, q.lon)
             inst = etc.INSTRUMENTS[q.instrument]
-            skym[up] = etc.sky_mag(inst, ra, dec, x[up], *moon)
+            skym[up] = etc.sky(inst, q.sky_model, q.band, ra, dec, alt[up], x[up], moon)
         lim[up] = limit_at(q, np.full(up.sum(), ra), np.full(up.sum(), dec), x[up],
-                           moon if q.mode == "etc" else None)
+                           moon if q.mode == "etc" else None, alt=alt[up])
     followable = dark & (x <= q.airmass_max) & in_window & (mags[q.band] <= np.where(up, lim, -np.inf))
     step = step_min / 1440.0
     fin = lambda a: [None if not np.isfinite(v) else round(float(v), 3) for v in a]  # noqa: E731
@@ -544,10 +556,10 @@ def run(q: Query, store: Path = STORE):
                     alt = np.degrees(np.arcsin(np.clip(sin_alt, -1, 1)))
                     x = 1.0 / np.sin(np.radians(alt + 244.0 / (165.0 + 47.0 * np.abs(alt) ** 1.1)))
                     ok = (alt > 0) & (x <= q.airmass_max)
-                    o, j, dt, m, x = o[ok], j[ok], dt[ok], m[ok], x[ok]
+                    o, j, dt, m, x, alt = o[ok], j[ok], dt[ok], m[ok], x[ok], alt[ok]
                     if q.mode == "etc" and len(o):
                         # SNR >= snr_target within t_exp_total for this pair's airmass and sky (Moon)
-                        lim = limit_at(q, ra[o], dec[o], x, tuple(v[j] for v in moon_tn))
+                        lim = limit_at(q, ra[o], dec[o], x, tuple(v[j] for v in moon_tn), alt=alt)
                         ok = m <= lim
                         o, j, dt = o[ok], j[ok], dt[ok]
                     if not len(o):
@@ -573,7 +585,8 @@ def run(q: Query, store: Path = STORE):
                 if len(ii) > cap:
                     ii = np.sort(rng.choice(ii, cap, replace=False))
                 sky[kind].append({"cls": name, "survey": survey, "idx": src[ii], "shift": shift[ii],
-                                  "ra": ra[ii], "dec": dec[ii], "w": w[ii], "hours": hours[ii], "first": first[ii],
+                                  "ra": ra[ii], "dec": dec[ii], "z": d["z"][src[ii]],
+                                  "w": w[ii], "hours": hours[ii], "first": first[ii],
                                   "frac": len(ii) / max(int(sel_k.sum()), 1)})
             # source id unique across surveys (copies of one simulated object are fully correlated)
             objs.append(dict(w=w[r], hours=hours[r], first=first[r], nights=nnights[r],

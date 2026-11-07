@@ -146,7 +146,7 @@ details summary { cursor: pointer; color: var(--ink); font-weight: 600; }
       </div>
       <div class="row">
         <label>Binning<select id="binning"><option value="1">1×1</option><option value="2">2×2</option></select></label>
-        <span></span>
+        <label>Sky model<select id="skymodel"><option value="ino">INO calculator</option><option value="ks91">Krisciunas &amp; Schaefer 1991</option></select></label>
       </div>
     </div>
     <div class="row">
@@ -159,9 +159,8 @@ details summary { cursor: pointer; color: var(--ink); font-weight: 600; }
     </div>
   </fieldset>
   <fieldset>
-    <legend>Classes</legend>
-    <div class="checks" id="classes"></div>
-    <p class="links"><a id="all">all</a><a id="none">none</a></p>
+    <legend>Class</legend>
+    <select id="classes"></select>
   </fieldset>
   <fieldset>
     <legend>Rubin survey</legend>
@@ -209,7 +208,7 @@ function erfc(x) {  // Numerical Recipes erfc, |error| < 1.2e-7
 // the active follow-up limit in words: "r ≤ 20" or "SNR ≥ 10 in ≤ 60 min (INO 3.4 m, r)"
 function limitText(qs) {
   if (qs && qs.mode === "etc")
-    return `SNR ≥ ${qs.snr_target} in ≤ ${fmt(qs.t_exp_total / 60, qs.t_exp_total < 600 ? 1 : 0)} min (${qs.instrument}, ${qs.band}, seeing ${qs.seeing}″)`;
+    return `SNR ≥ ${qs.snr_target} in ≤ ${fmt(qs.t_exp_total / 60, qs.t_exp_total < 600 ? 1 : 0)} min (${qs.instrument}, ${qs.band}, seeing ${qs.seeing}″, ${qs.sky_model === "ks91" ? "KS91 sky" : "INO sky"})`;
   return `${qs.band} ≤ ${qs.mag_lim}`;
 }
 const relErr = (e, x) => x > 0 ? `${Math.round(100 * e / x)}%` : "–";
@@ -260,13 +259,8 @@ async function init() {
   $("mode_etc").onchange = () => applyMode(true);
   $("mode_maglim").onchange = () => applyMode(false);
   $("instrument").onchange = () => applyMode(true);
-  const cl = $("classes");
-  for (const c of META.classes) {
-    const n = Object.values(META.entries).filter(e => e.class === c).reduce((a, e) => a + e.N_det_10yr, 0);
-    cl.insertAdjacentHTML("beforeend", `<label title="${fmt(n)} detected / 10 yr (all surveys)"><input type="checkbox" value="${c}" ${["SNIa","SNII","SNIbc","SLSN-I","TDE","SNIIn","SNIax"].includes(c) ? "checked" : ""}><span class="sw" style="background:${colorOf(group(c))}"></span>${c}</label>`);
-  }
-  $("all").onclick = () => cl.querySelectorAll("input").forEach(i => i.checked = true);
-  $("none").onclick = () => cl.querySelectorAll("input").forEach(i => i.checked = false);
+  for (const c of META.classes) $("classes").add(new Option(c, c));
+  $("classes").value = META.classes.includes("SNIa") ? "SNIa" : META.classes[0];
   for (const s of META.surveys)
     $("surveys").insertAdjacentHTML("beforeend", `<label><input type="checkbox" value="${s}" ${s === "WFD" ? "checked" : ""}>${s}</label>`);
   const [lo, hi] = META.mjd_range;
@@ -316,13 +310,14 @@ const TIPS = {
   snr: "Signal-to-noise ratio the follow-up must reach (source + sky + read + dark noise, as in the INO calculator).",
   texp: "Maximum total integration time, in minutes. It is split into equal exposures of at most 320 s (the calculator's range is 30-320 s per exposure) and the SNR is added in quadrature (sqrt of the number of frames).",
   seeing: "Seeing FWHM in arcsec; it sets the photometric aperture (pi x (2 x seeing / pixel scale x binning)^2 pixels, as in the INO calculator). INO presets: 0.7 optimal, 0.9, 1.15 moderate, 1.4, 1.75 very high.",
+  skymodel: "Sky brightness model. INO calculator: the original fit in Moon separation, with a Moon-phase term applied only while the Moon is up (the sky jumps at moonrise/moonset, and a thin Moon makes it darker than no Moon). Krisciunas & Schaefer (1991): dark sky (u 22.3, g 22.1, r 21.1, i 20.1 mag/arcsec² at zenith, brightening with airmass) plus scattered moonlight from phase, separation and both altitudes; moonlight only brightens the sky and fades out continuously as the Moon sets.",
   binning: "Detector binning (as in the INO calculator, the aperture pixel count grows with binning).",
   xmax: "Maximum airmass (≈ sec z, Pickering 2002): 1.5 ≈ 42° altitude, 2.0 ≈ 30°, 3.0 ≈ 19.5°.",
   tmin: "Earliest follow-up time after the first Rubin detection, in days (e.g. alert latency or the time needed to trigger). 0 = immediately.",
   tmax: "Follow-up ends this many days after the event's maximum light (the brightest model point in any band). Events first detected after their maximum get a correspondingly shorter window. Events are tracked until then, even beyond the window end.",
   classes: "Transient classes of the ALCeS native-rate simulations (SNANA class rates, OpSim baseline v5.3.1). Hover a class for its model and number of detections.",
   surveys: "Rubin survey component. The two are simulated separately.",
-  all: "Select all classes", none: "Deselect all classes", yall: "Select all survey years", ynone: "Deselect all survey years",
+  yall: "Select all survey years", ynone: "Deselect all survey years",
   go: "Run the calculation (usually under a second).",
   theme: "Switch between light and dark display.",
 };
@@ -355,10 +350,10 @@ function tip(el, text) {
 }
 function addTips() {
   for (const [id, t] of Object.entries(TIPS)) tip($(id), t);
-  $("classes").querySelectorAll("input").forEach(i => {
-    const n = Object.values(META.entries).filter(e => e.class === i.value).reduce((a, e) => a + e.N_det_10yr, 0);
-    tip(i, `${CLASS_TIPS[i.value] || i.value} · ${fmt(n)} detected by Rubin in 10 yr (WFD + DDF)`);
-  });
+  for (const o of $("classes").options) {
+    const n = Object.values(META.entries).filter(e => e.class === o.value).reduce((a, e) => a + e.N_det_10yr, 0);
+    o.title = `${CLASS_TIPS[o.value] || o.value} · ${fmt(n)} detected by Rubin in 10 yr (WFD + DDF)`;
+  }
   $("surveys").querySelectorAll("input").forEach(i => tip(i, SURVEY_TIPS[i.value] || i.value));
   $("years").querySelectorAll("input").forEach(i => {
     const lo = META.mjd_range[0] + 365.25 * +i.value;
@@ -379,12 +374,12 @@ $("form").onsubmit = async ev => {
   ev.preventDefault();
   const body = {
     lat: +$("lat").value, lon: +$("lon").value, height: +$("height").value,
-    classes: [...$("classes").querySelectorAll("input:checked")].map(i => i.value),
+    classes: [$("classes").value],
     surveys: [...$("surveys").querySelectorAll("input:checked")].map(i => i.value),
     band: $("band").value, mag_lim: +$("mlim").value, airmass_max: +$("xmax").value,
     mode: $("mode_etc").checked ? "etc" : "maglim", instrument: $("instrument").value || "INO",
     snr_target: +$("snr").value, t_exp_total: 60 * +$("texp").value, seeing: +$("seeing").value,
-    binning: +$("binning").value,
+    binning: +$("binning").value, sky_model: $("skymodel").value,
     t_min: +$("tmin").value, t_max: +$("tmax").value,
     mjd_start: toMJD($("d0").value), mjd_end: toMJD($("d1").value) + 1,
     step_min: +$("step").value, sun_alt: +$("sunalt").value, fold_years: $("fold").checked,
@@ -438,6 +433,8 @@ function binLabels(edges, unit, d = 1) {
 }
 
 // ---------- sky map ----------
+const Z_SCALE = [[0, "#cde2fb"], [0.17, "#9ec5f4"], [0.33, "#6da7ec"], [0.5, "#3987e5"], [0.67, "#256abf"],
+                 [0.83, "#184f95"], [1, "#0d366b"]];
 const SYMBOL = {"SNIa": "circle-open", "SNII": "square-open", "SLSN-I": "diamond-open", "TDE": "triangle-up-open",
                 "SNIIn": "triangle-down-open", "SNIax": "pentagon-open", "SNIa-91bg": "hexagon-open", "SNIbc": "star-open",
                 "Other": "x-thin-open"};
@@ -464,19 +461,19 @@ function renderSky(r, G) {
     traces.push({type: "scattergeo", mode: "lines", name: `airmass ≤ ${r.query.airmass_max} limit`, lon, lat: lon.map(() => d),
       line: {color: css("--ink2"), width: 1.2, dash: "dash"}, hoverinfo: "skip", showlegend: d === r.airmass_dec_band.find(v => v > -89.5 && v < 89.5)});
   }
-  // open symbols, one per class: ALCeS reuses (RA, Dec, t0) draws across classes, so events of different classes
-  // often sit at exactly the same position; size grows with the real events each simulated object stands for.
-  // Classes with the largest markers are drawn first so smaller ones stay visible on top.
-  const groupsBySize = [...G].sort((a, b) => maxW(f, b) - maxW(f, a));
-  for (const g of groupsBySize) {
-    const ii = [...Array(f.n).keys()].filter(i => group(f.cls[i]) === g);
-    if (!ii.length) continue;
-    traces.push({type: "scattergeo", mode: "markers", name: g, lon: ii.map(i => skyLon(f.ra[i])), lat: ii.map(i => f.dec[i]),
-      legendrank: G.indexOf(g) + 10,
-      marker: {size: ii.map(i => markerSize(f.w[i])), symbol: SYMBOL[g] || "x-thin-open", color: colorOf(g),
-               line: {color: colorOf(g), width: 2}},
-      customdata: ii.map(i => [f.cls[i], f.survey[i], f.idx[i], f.shift[i], f.hours[i], f.w[i], f.ra[i], f.first[i]]),
-      hovertemplate: "<b>%{customdata[0]}</b> (%{customdata[1]})<br>RA %{customdata[6]:.2f}°, Dec %{lat:.2f}°<br>followable %{customdata[4]:.1f} h, first chance %{customdata[7]:.1f} d after detection<br>stands for %{customdata[5]:.2f} real events<br><i>click for details</i><extra></extra>"});
+  // followable events, filled markers coloured by redshift (sequential blue, light = low z), size growing with the
+  // real events each simulated object stands for
+  if (f.n) {
+    const ii = [...Array(f.n).keys()].sort((p, q) => f.w[q] - f.w[p]);     // big markers first, small ones on top
+    traces.push({type: "scattergeo", mode: "markers", name: "followable", showlegend: false,
+      lon: ii.map(i => skyLon(f.ra[i])), lat: ii.map(i => f.dec[i]),
+      marker: {size: ii.map(i => markerSize(f.w[i])), color: ii.map(i => f.z[i]), colorscale: Z_SCALE,
+               cmin: 0, cmax: Math.max(...f.z) || 1, line: {color: css("--surface"), width: 0.8},
+               colorbar: {title: {text: "redshift z", side: "right", font: {color: css("--ink2"), size: 12}},
+                          thickness: 12, len: 0.8, x: 1.0, tickfont: {color: css("--ink2"), size: 11},
+                          outlinewidth: 0}},
+      customdata: ii.map(i => [f.cls[i], f.survey[i], f.idx[i], f.shift[i], f.hours[i], f.w[i], f.ra[i], f.first[i], f.z[i]]),
+      hovertemplate: "<b>%{customdata[0]}</b> (%{customdata[1]}), z = %{customdata[8]:.3f}<br>RA %{customdata[6]:.2f}°, Dec %{lat:.2f}°<br>followable %{customdata[4]:.1f} h, first chance %{customdata[7]:.1f} d after detection<br>stands for %{customdata[5]:.2f} real events<br><i>click for details</i><extra></extra>"});
   }
   const labels = [0, 3, 6, 9, 15, 18, 21].map(h => ({h, lon: skyLon(15 * h)}));
   traces.push({type: "scattergeo", mode: "text", lon: labels.map(l => l.lon), lat: labels.map(() => 0), text: labels.map(l => `${l.h}h`),
@@ -678,7 +675,7 @@ function render(r) {
     <div class="tile"><div class="k">Fraction followable</div><div class="v">${dets > 0 ? (100 * fu / dets).toFixed(dets > 0 && fu / dets < 0.01 ? 2 : 1) + "%" : "–"}</div><div class="e">${limitText(r.query_summary)} · X ≤ ${q.airmass_max} · ${q.t_min} d after detection to ${q.t_max} d after max.</div></div>
     <div class="tile"><div class="k">Distinct followable objects per night</div><div class="v">${fmtN(r.per_night_mean)}</div><div class="e">mean over ${r.n_nights} nights</div></div>
   </div>
-  <div class="card"><h2>Sky distribution</h2><p class="cap">Mollweide projection in equatorial coordinates (RA increases to the left, 0h at the centre). Coloured: followable events first detected in the window; grey: a sample of detected events that are never followable. One open symbol per class; <b>symbol size grows with the number of real events a simulated object stands for</b> (e.g. each simulated SN Ia stands for hundreds). ALCeS reuses the same random positions and explosion times for every class, so symbols of different classes often coincide. Dashed: declination limits reachable within the airmass limit from the site; dotted: Galactic plane. <b>Click an event</b> to see its light curve, Rubin photometry and visibility windows.${skyNote(r)}</p><div id="p_sky" class="plot" style="height:430px"></div></div>
+  <div class="card"><h2>Sky distribution</h2><p class="cap">Mollweide projection in equatorial coordinates (RA increases to the left, 0h at the centre). Coloured by <b>redshift</b> (colour bar): followable events first detected in the window; grey: a sample of detected events that are never followable. <b>Symbol size grows with the number of real events a simulated object stands for.</b> Dashed: declination limits reachable within the airmass limit from the site; dotted: Galactic plane. <b>Click an event</b> to see its light curve, Rubin photometry and visibility windows.${skyNote(r)}</p><div id="p_sky" class="plot" style="height:430px"></div></div>
   <div class="card" id="objcard" hidden></div>
   ${r.by_year ? `<div class="card"><h2>Folding check: the window estimated from each survey year alone</h2><p class="cap">Expected followable events in this window if every year were like survey year N (error bars ±1σ); the line is the folded result. ${r.by_year.chi2 != null ? `Scatter χ²/dof = <b>${r.by_year.chi2.toFixed(1)} / ${r.by_year.dof}</b> (${foldVerdict(r.by_year.chi2, r.by_year.dof)}).` : ""} Years that differ beyond their errors are not equivalent for these cuts: drop them or keep folding off.</p><div id="p_year" class="plot" style="height:240px"></div></div>` : ""}
   <div class="card"><h2>Followable objects per night</h2><p class="cap">Expected number of distinct objects that meet all limits at least once during each night, stacked by class.</p><div id="p_night" class="plot"></div></div>

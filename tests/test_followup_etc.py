@@ -93,3 +93,40 @@ def test_best_limit_bounds_the_darkest_sky():
     assert thin_moon_up > moon_down
     lim = etc.limiting_mag(INO, "r", 10, 3600, 1.0, thin_moon_up)
     assert engine.best_limit(q) >= lim - 1e-9
+
+
+def test_ks91_sky_model():
+    """Krisciunas & Schaefer (1991): dark sky without Moon, moonlight only brightens, continuous at moonset, and a
+    hand-worked V-band example."""
+    import dataclasses
+    # Moon down: dark zenith sky at the zenith, brighter at larger airmass
+    for band in "ugri":
+        assert np.isclose(etc.sky_mag_ks91(INO, band, 90.0, 90.0, -10.0, 1.0), etc.DARK_SKY_ZENITH[band])
+        assert etc.sky_mag_ks91(INO, band, 30.0, 90.0, -10.0, 1.0) < etc.DARK_SKY_ZENITH[band]
+    # moonlight only brightens; full Moon close by brightens a lot
+    alts = np.linspace(-5, 80, 200)
+    s = etc.sky_mag_ks91(INO, "r", 50.0, 40.0, alts, 1.0)
+    assert np.all(s <= etc.sky_mag_ks91(INO, "r", 50.0, 40.0, -10.0, 1.0) + 1e-12)
+    assert etc.sky_mag_ks91(INO, "r", 50.0, 10.0, 60.0, 1.0) < etc.DARK_SKY_ZENITH["r"] - 2.5
+    # continuous at moonset (fade below the horizon): full Moon 40 deg away. The sky changes steeply but smoothly near
+    # the horizon, so the largest step must shrink in proportion to the sampling (a jump would not)
+    steps = []
+    for h in (0.05, 0.005):
+        s = etc.sky_mag_ks91(INO, "r", 50.0, 40.0, np.arange(-3.0, 3.0, h), 1.0)
+        steps.append(np.max(np.abs(np.diff(s))))
+    assert steps[1] < 0.2 * steps[0] and steps[1] < 0.005
+    assert np.isclose(s[0], etc.sky_mag_ks91(INO, "r", 50.0, 40.0, -10.0, 1.0))     # no moonlight 3 deg below
+    # hand-worked V example (k = 0.172, dark V 21.587): full Moon (alpha 0) 30 deg from a target, both at 60 deg
+    v = dataclasses.replace(INO, extinction={**INO.extinction, "V": 0.172})
+    etc.DARK_SKY_ZENITH["V"] = 21.587
+    try:
+        x = (1 - 0.96 * np.sin(np.radians(30)) ** 2) ** -0.5
+        xm = 1 / (np.cos(np.radians(30)) + 0.025 * np.exp(-11 * np.cos(np.radians(30))))
+        f = 10 ** 5.36 * (1.06 + np.cos(np.radians(30)) ** 2) + 10 ** (6.15 - 30 / 40)
+        b_moon = f * 10 ** (-0.4 * 3.84) * 10 ** (-0.4 * 0.172 * xm) * (1 - 10 ** (-0.4 * 0.172 * x))
+        b_dark = 34.08 * np.exp(20.7233 - 0.92104 * 21.587) * 10 ** (-0.4 * 0.172 * (x - 1)) * x
+        expected = (20.7233 - np.log((b_moon + b_dark) / 34.08)) / 0.92104
+        got = etc.sky_mag_ks91(v, "V", 60.0, 30.0, 60.0, 1.0)
+        assert np.isclose(got, expected) and 17.3 < got < 18.2
+    finally:
+        del etc.DARK_SKY_ZENITH["V"]

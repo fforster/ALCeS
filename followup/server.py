@@ -48,6 +48,7 @@ class RunRequest(BaseModel):
     t_exp_total: float = Field(3600.0, ge=30)  # s
     seeing: float = Field(1.15, gt=0)          # arcsec
     binning: int = Field(1, ge=1, le=4)
+    sky_model: str = "ino"                     # ETC sky: "ino" or "ks91"
 
 
 @app.get("/api/meta")

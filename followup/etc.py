@@ -156,6 +156,72 @@ def moon_state(mjd, lat, lon):
     return mra, mdec, alt, fli
 
 
+SKY_MODELS = ("ino", "ks91")
+
+# KS91 inputs per band: dark zenith sky [mag/arcsec^2] at a dark site (typical values, e.g. CTIO/La Palma; replace
+# with measured INO values when available). Extinction coefficients are the instrument's.
+DARK_SKY_ZENITH = {"u": 22.3, "g": 22.1, "r": 21.1, "i": 20.1}
+MOON_FADE_DEG = 2.0    # moonlight fades to zero over this many degrees below the horizon (continuity at moonset)
+
+
+def _nL_from_mag(m):
+    """surface brightness [mag/arcsec^2] -> nanolamberts (Krisciunas & Schaefer 1991, eq. 1 inverse)"""
+    return 34.08 * np.exp(20.7233 - 0.92104 * np.asarray(m, float))
+
+
+def _mag_from_nL(b):
+    return (20.7233 - np.log(np.asarray(b, float) / 34.08)) / 0.92104
+
+
+def _x_ks(z_rad):
+    """KS91 eq. 3: X(Z) = (1 - 0.96 sin^2 Z)^-1/2 (finite, 5, at the horizon)"""
+    return (1.0 - 0.96 * np.sin(z_rad) ** 2) ** -0.5
+
+
+def _x_rozenberg(z_rad):
+    """Rozenberg (1966) airmass, ~40 at the horizon: used for the Moon's own extinction so that its light fades
+    smoothly to zero at moonset (with KS's X(Z) = 5 at the horizon the moonlight would still jump at moonset)."""
+    c = np.cos(z_rad)
+    return 1.0 / (c + 0.025 * np.exp(-11.0 * c))
+
+
+def sky_mag_ks91(inst: Instrument, band, target_alt, sep_deg, moon_alt, fli):
+    """Sky brightness [mag/arcsec^2] after Krisciunas & Schaefer (1991, PASP 103, 1033): dark sky (zenith value,
+    brightening with airmass, eq. 2) plus scattered moonlight (eqs. 15-21), which is zero with the Moon below the
+    horizon and goes to zero continuously as it sets. KS91 is a V-band model: the same moonlight [nL] is added in
+    every band, with that band's extinction coefficient and dark sky."""
+    k = inst.extinction[band]
+    z = np.radians(90.0 - np.clip(target_alt, 0.0, 90.0))
+    zm = np.radians(90.0 - np.clip(moon_alt, -90.0, 90.0))
+    x_t = _x_ks(z)
+    b_dark = _nL_from_mag(DARK_SKY_ZENITH[band]) * 10 ** (-0.4 * k * (x_t - 1.0)) * x_t
+    # Moon phase angle from the illuminated fraction: fli = (1 + cos alpha) / 2
+    alpha = np.degrees(np.arccos(np.clip(2.0 * np.asarray(fli, float) - 1.0, -1.0, 1.0)))
+    i_star = 10 ** (-0.4 * (3.84 + 0.026 * alpha + 4e-9 * alpha ** 4))
+    rho = np.clip(np.asarray(sep_deg, float), 1e-3, 180.0)
+    f_rho = 10 ** 5.36 * (1.06 + np.cos(np.radians(rho)) ** 2) + 10 ** (6.15 - rho / 40.0)
+    # Moon's extinction: Rozenberg airmass (~40 at the horizon). Its ~4% of moonlight left at the horizon still matters
+    # for a bright Moon near the target, so the moonlight then fades linearly to zero over MOON_FADE_DEG below the
+    # horizon (a stand-in for the Moon's own twilight): the sky is continuous at moonrise/moonset.
+    malt = np.asarray(moon_alt, float)
+    alt_eff = np.maximum(malt, 0.0)
+    x_m = _x_rozenberg(np.radians(90.0 - alt_eff))
+    fade = np.clip((malt + MOON_FADE_DEG) / MOON_FADE_DEG, 0.0, 1.0)
+    b_moon = fade * f_rho * i_star * 10 ** (-0.4 * k * x_m) * (1.0 - 10 ** (-0.4 * k * x_t))
+    return _mag_from_nL(b_dark + b_moon)
+
+
+def sky(inst: Instrument, model, band, target_ra, target_dec, target_alt, airmass, moon):
+    """Sky brightness [mag/arcsec^2] with the chosen model: "ino" (original INO calculator) or "ks91".
+    moon = (ra, dec, alt, fli) from moon_state()."""
+    mra, mdec, malt, fli = moon
+    if model == "ks91":
+        return sky_mag_ks91(inst, band, target_alt, separation_deg(target_ra, target_dec, mra, mdec), malt, fli)
+    if model == "ino":
+        return sky_mag(inst, target_ra, target_dec, airmass, mra, mdec, malt, fli)
+    raise ValueError(f"sky model must be one of {SKY_MODELS}")
+
+
 def sky_mag(inst: Instrument, target_ra, target_dec, airmass, moon_ra, moon_dec, moon_alt, fli):
     """Sky brightness [mag/arcsec^2] (ancillary_functions.calculate_sky_magnitude, vectorized)."""
     a, b, c = inst.sky_fit

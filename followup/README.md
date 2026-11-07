@@ -21,7 +21,13 @@ window.
     SNR-multiplier tables for single exposures of 30–320 s.
   - The total time is split into N = ceil(t / 320 s) equal frames, and the SNR adds as √N.
   - The limit is the exact algebraic inverse of the SNR formula.
-  - Parameters: `instrument` (INO), `snr_target`, `t_exp_total` [s], `seeing` [″] and `binning`.
+  - Parameters: `instrument` (INO), `snr_target`, `t_exp_total` [s], `seeing` [″], `binning` and `sky_model`.
+  - `sky_model`: `ino` (default) is the calculator's own fit. Its Moon-phase term applies only while the Moon is up,
+    so the sky (and the limit) jumps at moonrise and moonset, and a thin Moon makes the sky darker than no Moon.
+    `ks91` is Krisciunas & Schaefer (1991): a dark zenith sky (u 22.3, g 22.1, r 21.1, i 20.1 mag/arcsec²)
+    brightening with airmass, plus scattered moonlight from the phase angle, the Moon–target separation and both
+    airmasses (Rozenberg airmass for the Moon). Moonlight fades linearly over the 2° below the horizon, so the limit
+    stays continuous at moonrise and moonset.
   - `tests/test_followup_etc.py` reproduces the original single-exposure SNR to 10⁻¹² and checks the inversion and
     the Moon ephemeris against astropy.
   - Kept as in the original, and worth reviewing:
@@ -74,7 +80,7 @@ astropy observatory registry; the others are published site coordinates (~0.01°
 on the map, and every control has a hover explanation.
 
 **Sky map and single events.** The results include a Mollweide sky map (equatorial; RA increases to the left).
-- It shows every followable event first detected in the window, coloured by class, plus a grey sample of detected
+- It shows every followable event first detected in the window, coloured by redshift (colour bar), plus a grey sample of detected
   events that are never followable, the declination limits reachable within the airmass limit, and the Galactic
   plane.
 - Clicking an event opens its noiseless model light curve per band (`model_dense`) and Rubin's photometry
@@ -173,8 +179,8 @@ Non-transients are not included: the native LCLIB runs have no light curves.
   the classes' sampling fluctuations are correlated.
   - Totals over classes therefore group events by draw (survey, RA, Dec) before squaring the weights. For example,
     detected ± 34k instead of ± 29k when treated as independent.
-  - On the sky map, symbols of different classes often coincide, so each class has its own open symbol and the
-    marker size grows with the real events a simulated object stands for.
+  - The GUI selects one class at a time (dropdown), so the sky map shows a single class coloured by redshift;
+    marker size grows with the real events a simulated object stands for. The API still accepts several classes.
 - Moon, weather, telescope slews and the time a site needs to react are ignored.
 - WFD and DDF are separate simulations: selecting both double-counts the DDF fields (≈0.3% of the WFD area).
 - Only Rubin detection is modelled: an object enters at its first Rubin detection, not at its explosion.
