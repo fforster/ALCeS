@@ -83,6 +83,15 @@ on the map, and every control has a hover explanation.
 - It shows every followable event first detected in the window, coloured by redshift (colour bar), plus a grey sample of detected
   events that are never followable, the declination limits reachable within the airmass limit, and the Galactic
   plane.
+- **The map is not a representative sample.** With the flat-log-z training sets every redshift bin holds about the
+  same number of simulated objects, so nearby events are over-represented in the number and colours of the points
+  (SN Ia WFD, default query: median z 0.056 counting points, 0.111 weighted). Only marker size carries the weight;
+  the GUI says so above the map. Sky positions are fine (the share per declination band agrees with the weighted one
+  within a few points).
+- Next to the map, **expected real events per redshift bin**: weighted sums for detected (outline) and followable
+  (bars, coloured as on the map) events, ±1σ, with the number of followable simulated objects per bin (the map
+  points) on a second axis. Per class the engine returns `z_bins` (20 log-spaced bins over the simulated range),
+  `hist_z_detected`, `hist_z_followable` and their `_err` and `_nsim` arrays; the bins add up to the totals.
 - Clicking an event opens its noiseless model light curve per band (`model_dense`) and Rubin's photometry
   (`phot_df`: detections with 1σ errors; 5σ limits of non-detections on request).
 - Shaded intervals show when it is observable from the site (night and airmass) and when it is followable (all

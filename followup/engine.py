@@ -436,6 +436,16 @@ def night_detail(q: Query, cls: str, survey: str, idx: int, shift: float, mjd: f
             "night_noon_mjd": float(noon), "query": query_summary(q)}
 
 
+def z_bins(z, n=20):
+    """n log-spaced redshift bins spanning the simulated redshifts z (a fixed range if there are none)."""
+    z = np.asarray(z, float)
+    z = z[np.isfinite(z) & (z > 0)]
+    lo, hi = (float(z.min()), float(z.max())) if len(z) else (0.01, 1.0)
+    if hi <= lo * 1.01:
+        lo, hi = lo / 1.1, hi * 1.1
+    return np.geomspace(lo * 0.999, hi * 1.001, n + 1)
+
+
 def _hist(x, w, bins):
     h = np.histogram(x, bins=bins, weights=w)[0]
     e = np.sqrt(np.histogram(x, bins=bins, weights=w ** 2)[0])
@@ -590,7 +600,7 @@ def run(q: Query, store: Path = STORE):
                                   "frac": len(ii) / max(int(sel_k.sum()), 1)})
             # source id unique across surveys (copies of one simulated object are fully correlated)
             objs.append(dict(w=w[r], hours=hours[r], first=first[r], nights=nnights[r],
-                             src=src[r] + (len(objs) << 32), yr=yr[r]))
+                             src=src[r] + (len(objs) << 32), yr=yr[r], z=np.asarray(d["z"], float)[src[r]]))
             # ALCeS reuses its random seeds across classes: object k of a run has the same (RA, Dec, t0) in every
             # class. Events sharing a draw (and the year-shifted copies of one object) fluctuate together, so
             # errors of sums over classes group them by (survey, RA, Dec) before squaring.
@@ -627,8 +637,30 @@ def run(q: Query, store: Path = STORE):
             s = np.argsort(x)
             c = np.cumsum(wf[s]) / wf.sum()
             return float(x[s][np.searchsorted(c, p)])
+        # expected events per redshift bin (log-spaced over the class's simulated range). The simulations are flat
+        # in log z, so counts of simulated objects per bin say nothing about the real population: only the weighted
+        # sums do (per bin they add up to the real detected rate times the measured efficiency).
+        zb = z_bins(o["z"])
+
+        def z_hist(sel):
+            if not sel.any():
+                zero = [0.0] * (len(zb) - 1)
+                return zero, zero, [0] * (len(zb) - 1)
+            ib = np.digitize(o["z"][sel], zb) - 1
+            ib = np.clip(ib, 0, len(zb) - 2)
+            h = np.bincount(ib, weights=o["w"][sel], minlength=len(zb) - 1)
+            # error: copies of one simulated object (folded years) are fully correlated
+            pairs, inv = np.unique(np.stack([ib, o["src"][sel]]), axis=1, return_inverse=True)
+            ws = np.bincount(inv.ravel(), weights=o["w"][sel], minlength=pairs.shape[1])
+            e = np.sqrt(np.bincount(pairs[0], weights=ws ** 2, minlength=len(zb) - 1))
+            n = np.bincount(pairs[0], minlength=len(zb) - 1)
+            return h.tolist(), e.tolist(), n.astype(int).tolist()
+        zd, zde, zdn = z_hist(np.ones(len(fu), bool))
+        zf, zfe, zfn = z_hist(fu)
         per_class.append({
-            "class": name, "n_sim_detected": n_sim_det, "n_sim_followable": int(len(np.unique(o["src"][fu]))),
+            "class": name, "n_sim_detected": n_sim_det,
+            "z_bins": zb.tolist(), "hist_z_detected": zd, "hist_z_detected_err": zde, "hist_z_detected_nsim": zdn,
+            "hist_z_followable": zf, "hist_z_followable_err": zfe, "hist_z_followable_nsim": zfn, "n_sim_followable": int(len(np.unique(o["src"][fu]))),
             "n_instances_detected": n_inst_det, "n_instances_followable": int(fu.sum()),
             "N_detected": w_det, "N_detected_err": src_err(np.ones(len(fu), bool)),
             "N_followable": float(wf.sum()), "N_followable_err": src_err(fu),

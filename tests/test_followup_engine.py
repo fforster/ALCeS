@@ -214,3 +214,24 @@ def test_etc_mode_matches_brute_force(tmp_path):
     # magnitude mode is untouched by the new fields
     q2 = engine.Query(**{**q.__dict__, "mode": "maglim", "mag_lim": 18.0})
     assert engine.run(q2, tmp_path)["mag_limit_best"] == 18.0
+
+
+def test_redshift_histograms_are_weighted_and_add_up(tmp_path):
+    """Expected events per z bin are sums of weights (not object counts) and add up to the totals."""
+    d = _store(tmp_path)
+    rng = np.random.default_rng(7)
+    d["z"] = 10 ** rng.uniform(-2, 0, len(d["t_fd"]))          # flat in log z, like the training sets
+    np.savez(tmp_path / "X_WFD.npz", **d)
+    engine.catalog.cache_clear(); engine.load.cache_clear()
+    q = engine.Query(classes=["X"], surveys=["WFD"], band="r", mag_lim=19.5, airmass_max=1.8, t_min=1.0, t_max=25.0,
+                     mjd_start=61000, mjd_end=61060, step_min=10, fold_years=False)
+    c = engine.run(q, tmp_path)["classes"][0]
+    e = np.array(c["z_bins"])
+    assert len(e) == 21 and e[0] <= d["z"].min() and e[-1] >= d["z"].max()
+    assert np.isclose(sum(c["hist_z_detected"]), c["N_detected"])
+    assert np.isclose(sum(c["hist_z_followable"]), c["N_followable"])
+    assert sum(c["hist_z_detected_nsim"]) == c["n_sim_detected"]
+    assert sum(c["hist_z_followable_nsim"]) == c["n_sim_followable"]
+    want = np.histogram(d["z"], e, weights=d["weight"])[0]
+    assert np.allclose(c["hist_z_detected"], want)
+    assert np.allclose(c["hist_z_detected_err"], np.sqrt(np.histogram(d["z"], e, weights=d["weight"] ** 2)[0]))

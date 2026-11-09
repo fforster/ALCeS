@@ -69,6 +69,9 @@ th.tiph { cursor: help; text-decoration: underline dotted var(--muted); text-und
 .card p.cap { margin: 0 0 6px; font-size: 12px; color: var(--ink2); }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
 .plot { width: 100%; height: 300px; }
+.skyrow { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 12px; align-items: start; }
+.warnbox { border-left: 3px solid var(--s4); padding: 6px 10px; margin: 0 0 8px;
+           font-size: 12.5px; color: var(--ink); }
 table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
 th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
 th:first-child, td:first-child { text-align: left; }
@@ -84,6 +87,7 @@ details summary { cursor: pointer; color: var(--ink); font-weight: 600; }
   aside { max-height: none; position: static; border-right: 0; border-bottom: 1px solid var(--ring); }
   main { padding: 16px; }
   .grid2 { grid-template-columns: 1fr; }
+  .skyrow { grid-template-columns: 1fr; }
 }
 </style>
 </head>
@@ -489,6 +493,40 @@ function renderSky(r, G) {
   });
 }
 
+// expected real events vs redshift (weighted), next to the sky map; x is log10 z with z tick labels
+function renderZ(r) {
+  const c = r.classes.find(k => k.z_bins);
+  if (!c) { Plotly.purge("p_z"); return; }
+  const e = c.z_bins, lz = e.map(Math.log10), n = e.length - 1;
+  const mid = lz.slice(0, -1).map((a, i) => (a + lz[i + 1]) / 2), wid = lz.slice(0, -1).map((a, i) => lz[i + 1] - a);
+  const zc = mid.map(v => 10 ** v), lab = [...Array(n).keys()].map(i => `z ${fmt(e[i], 3)}–${fmt(e[i + 1], 3)}`);
+  const f = r.sky.followable, zmax = (f.n ? Math.max(...f.z) : 0) || Math.max(...e);
+  const ticks = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5].filter(t => t >= e[0] * 0.8 && t <= e[n] * 1.25);
+  const pos = a => a.map(v => v > 0 ? v : null);
+  const ink2 = css("--ink2"), grid = css("--grid"), axis = css("--axis");
+  const traces = [
+    {type: "scatter", mode: "lines", name: "detected", x: [lz[0], ...mid, lz[n]], y: [c.hist_z_detected[0], ...c.hist_z_detected, c.hist_z_detected[n - 1]],
+     line: {shape: "hvh", color: css("--muted"), width: 1.5}, hoverinfo: "skip"},
+    {type: "scatter", mode: "markers", name: "detected", showlegend: false, x: mid, y: pos(c.hist_z_detected), marker: {size: 1, color: css("--muted")},
+     customdata: lab.map((l, i) => [l, c.hist_z_detected_err[i], c.hist_z_detected_nsim[i]]),
+     hovertemplate: "%{customdata[0]}<br>detected: %{y:,.1f} ± %{customdata[1]:,.1f} (%{customdata[2]} sim.)<extra></extra>"},
+    {type: "bar", name: "followable", x: mid, width: wid.map(w => w * 0.92), y: pos(c.hist_z_followable),
+     marker: {color: zc, colorscale: Z_SCALE, cmin: 0, cmax: zmax, line: {color: css("--surface"), width: 0.8}},
+     error_y: {type: "data", array: c.hist_z_followable_err, color: ink2, thickness: 1, width: 2},
+     customdata: lab.map((l, i) => [l, c.hist_z_followable_err[i], c.hist_z_followable_nsim[i]]),
+     hovertemplate: "%{customdata[0]}<br>followable: %{y:,.1f} ± %{customdata[1]:,.1f} expected events<br>from %{customdata[2]} simulated objects<extra></extra>"},
+    {type: "scatter", mode: "lines+markers", name: "simulated objects (map points)", x: mid, y: c.hist_z_followable_nsim, yaxis: "y2",
+     line: {color: ink2, width: 1.5, dash: "dot"}, marker: {size: 4, color: ink2}, hoverinfo: "skip"},
+  ];
+  const ax = {gridcolor: grid, linecolor: axis, tickfont: {color: ink2, size: 11}, title: {font: {color: ink2, size: 12}}, automargin: true};
+  const lay = layout({hovermode: "closest", barmode: "overlay", margin: {l: 56, r: 50, t: 8, b: 44},
+    legend: {orientation: "h", y: 1.14, x: 0, font: {size: 11, color: ink2}},
+    xaxis: {title: {text: "redshift z"}, tickvals: ticks.map(Math.log10), ticktext: ticks.map(String), range: [lz[0] - 0.02, lz[n] + 0.02]},
+    yaxis: {title: {text: "expected real events per bin"}, type: "log", rangemode: "normal"}});
+  lay.yaxis2 = {...ax, overlaying: "y", side: "right", rangemode: "tozero", showgrid: false, title: {text: "simulated objects", font: {color: ink2, size: 12}}};
+  Plotly.newPlot("p_z", traces, lay, CFG);
+}
+
 // ---------- one event: light curve, Rubin photometry, visibility ----------
 const BAND_COLOR = {u: "--s7", g: "--s3", r: "--s8", i: "--s2", z: "--s5", Y: "--s4"};
 let LASTOBJ = null;
@@ -675,7 +713,12 @@ function render(r) {
     <div class="tile"><div class="k">Fraction followable</div><div class="v">${dets > 0 ? (100 * fu / dets).toFixed(dets > 0 && fu / dets < 0.01 ? 2 : 1) + "%" : "–"}</div><div class="e">${limitText(r.query_summary)} · X ≤ ${q.airmass_max} · ${q.t_min} d after detection to ${q.t_max} d after max.</div></div>
     <div class="tile"><div class="k">Distinct followable objects per night</div><div class="v">${fmtN(r.per_night_mean)}</div><div class="e">mean over ${r.n_nights} nights</div></div>
   </div>
-  <div class="card"><h2>Sky distribution</h2><p class="cap">Mollweide projection in equatorial coordinates (RA increases to the left, 0h at the centre). Coloured by <b>redshift</b> (colour bar): followable events first detected in the window; grey: a sample of detected events that are never followable. <b>Symbol size grows with the number of real events a simulated object stands for.</b> Dashed: declination limits reachable within the airmass limit from the site; dotted: Galactic plane. <b>Click an event</b> to see its light curve, Rubin photometry and visibility windows.${skyNote(r)}</p><div id="p_sky" class="plot" style="height:430px"></div></div>
+  <div class="card"><h2>Sky distribution and redshift</h2>
+    <p class="warnbox">⚠ <b>The points on the map are NOT a representative sample of the real population.</b> ${/flat|training/.test(META.source || "") ? "The simulations are artificially flat in log redshift: every redshift bin holds about the same number of simulated objects, however many real events it contains. Nearby events are therefore heavily over-represented and distant ones under-represented, both in the number of points and in their colours." : "Each point is one simulated object, standing for a different number of real events."} Only the marker <b>size</b> carries the weight. For the real redshift distribution use the <b>redshift plot</b> next to the map, which sums the weights (expected real events).</p>
+    <div class="skyrow">
+      <div><p class="cap">Mollweide projection in equatorial coordinates (RA increases to the left, 0h at the centre). Coloured by redshift (colour bar): followable simulated objects first detected in the window; grey: a sample of detected simulated objects that are never followable. Symbol size grows with the number of real events a simulated object stands for. Dashed: declination limits reachable within the airmass limit from the site; dotted: Galactic plane. <b>Click an event</b> to see its light curve, Rubin photometry and visibility windows.${skyNote(r)}</p><div id="p_sky" class="plot" style="height:400px"></div></div>
+      <div><p class="cap"><b>Expected real events per redshift bin</b> (sum of the simulation weights; ±1σ). Outline: detected by Rubin in the window; bars: followable, coloured as on the map. Dotted, right axis: followable <i>simulated objects</i> per bin, i.e. the points drawn on the map; compare its shape with the bars.</p><div id="p_z" class="plot" style="height:400px"></div></div>
+    </div></div>
   <div class="card" id="objcard" hidden></div>
   ${r.by_year ? `<div class="card"><h2>Folding check: the window estimated from each survey year alone</h2><p class="cap">Expected followable events in this window if every year were like survey year N (error bars ±1σ); the line is the folded result. ${r.by_year.chi2 != null ? `Scatter χ²/dof = <b>${r.by_year.chi2.toFixed(1)} / ${r.by_year.dof}</b> (${foldVerdict(r.by_year.chi2, r.by_year.dof)}).` : ""} Years that differ beyond their errors are not equivalent for these cuts: drop them or keep folding off.</p><div id="p_year" class="plot" style="height:240px"></div></div>` : ""}
   <div class="card"><h2>Followable objects per night</h2><p class="cap">Expected number of distinct objects that meet all limits at least once during each night, stacked by class.</p><div id="p_night" class="plot"></div></div>
@@ -703,6 +746,7 @@ function render(r) {
   </details>`;
 
   renderSky(r, G);
+  renderZ(r);
 
   if (r.by_year) {
     const by = r.by_year, yl = by.years.map(y => `Y${y + 1}`);
